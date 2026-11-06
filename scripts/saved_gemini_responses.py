@@ -503,7 +503,7 @@ def _material_entry(
             raise SavedResponseError("Transcript covered time cannot be supplied by a caller")
     else:
         if reviewed_free_form is not True:
-            raise SavedResponseError("Free-form material requires explicit Codex review")
+            raise SavedResponseError("Free-form material requires explicit Claude review")
         if covered_time_ranges is None:
             raise SavedResponseError("Free-form material requires conservative covered time")
         coverage = common.normalize_intervals(

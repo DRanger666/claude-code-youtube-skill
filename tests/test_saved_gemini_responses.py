@@ -507,7 +507,7 @@ class SavedGeminiResponseTests(SavedResponseFixture):
         self.assertNotIn("formatCheck", item["saved"])
         self.assertNotIn("coveredTimeRanges", item["saved"])
         index = saved.new_material_index(VIDEO_ID, updated_at=T0)
-        with self.assertRaisesRegex(saved.SavedResponseError, "explicit Codex review"):
+        with self.assertRaisesRegex(saved.SavedResponseError, "explicit Claude review"):
             saved.add_to_material_index(index, item["path"])
         saved.add_to_material_index(
             index,
