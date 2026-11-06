@@ -16,7 +16,6 @@
 | Path | Role |
 |---|---|
 | [`SKILL.md`](SKILL.md) | Codex skill entry point and runtime workflow. |
-| [`agents/openai.yaml`](agents/openai.yaml) | Codex-facing metadata and invocation policy. |
 | [`references/contracts.md`](references/contracts.md) | Exact local-state, MCP, Gemini, saved-response, index, and request-log contracts. |
 | [`scripts/setup_youtube_mcp.sh`](scripts/setup_youtube_mcp.sh) | Performs the one-time install and persistent Codex MCP registration. |
 | [`scripts/ensure_youtube_mcp.sh`](scripts/ensure_youtube_mcp.sh) | Installs and verifies the pinned portable YouTube MCP runtime. |
