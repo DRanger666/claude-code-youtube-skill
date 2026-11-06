@@ -1,21 +1,11 @@
-# Contribution conventions
+# Contributing
 
-Keep each change focused and preserve a useful history.
+Keep this simple. Add code only for a need that has actually come up, and prefer
+removing code to guarding it.
 
-- `SKILL.md` owns the runtime workflow.
-- `references/contracts.md` owns exact paths, pins, formats, and values.
-- `scripts/` owns executable behavior; `tests/` verifies it.
-- Update `REPOSITORY_MAP.md` when files are added, removed, renamed, or given a
-  different role.
-- Never commit credentials, local runtime state, generated responses, npm
-  dependencies, or disposable work files.
+- `SKILL.md` is the workflow, `scripts/` is the behavior, `tests/` checks it.
+- Never commit keys, downloaded data, or generated responses.
 
-Before committing:
-
-1. Inspect the staged diff.
-2. Run the narrowest relevant tests and structural validation.
-3. Scan staged content for credential material.
-4. Confirm local runtime files remain untracked.
-
-Use an imperative commit subject. For non-trivial changes, explain what
-changed, why, how it was validated, and any compatibility impact.
+One change per commit, with an imperative subject. For anything non-trivial, the
+message body says what changed, why, how it was validated, and its operational
+impact, so the work can be understood a year later.
