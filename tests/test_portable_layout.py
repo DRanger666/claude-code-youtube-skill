@@ -10,6 +10,7 @@ INSTALLER = ROOT / "scripts" / "ensure_youtube_mcp.sh"
 SETUP = ROOT / "scripts" / "setup_youtube_mcp.sh"
 INSTALL_NAME = "youtube"
 MCP_COMMIT = "06d5e7a83783f7a44498da88ade2ccaa42238747"
+FAKE_SECRET = "fake-youtube-api-key-value"
 
 
 class PortableLayoutTests(unittest.TestCase):
@@ -77,40 +78,45 @@ class PortableLayoutTests(unittest.TestCase):
             env=os.environ.copy(),
         )
 
-    def make_fake_codex(self, install, *, mismatched=False):
-        fake_bin = self.root / "codex-bin"
+    def make_fake_claude(self, install, *, mismatched=False):
+        fake_bin = self.root / "claude-bin"
         fake_bin.mkdir(exist_ok=True)
-        calls = self.root / "codex-calls.txt"
-        state = self.root / "codex-registration"
+        calls = self.root / "claude-calls.txt"
+        state = self.root / "claude-registration"
         if mismatched:
             state.write_text("mismatched\n", encoding="utf-8")
         self.write_executable(
-            fake_bin / "codex",
+            fake_bin / "claude",
             "#!/bin/sh\n"
             "set -eu\n"
-            "printf '%s\\n' \"$*\" >>\"$FAKE_CODEX_CALLS\"\n"
+            "printf '%s\\n' \"$*\" >>\"$FAKE_CLAUDE_CALLS\"\n"
             "case \"$1 $2\" in\n"
             "  'mcp get')\n"
-            "    [ -f \"$FAKE_CODEX_STATE\" ] || exit 1\n"
-            "    if [ \"$(cat \"$FAKE_CODEX_STATE\")\" = mismatched ]; then\n"
-            "      echo '  command: /different/node'\n"
-            "      echo '  args: /different/server.js'\n"
+            "    [ -f \"$FAKE_CLAUDE_STATE\" ] || exit 1\n"
+            "    echo 'youtube:'\n"
+            "    echo '  Scope: User config (available in all your projects)'\n"
+            "    if [ \"$(cat \"$FAKE_CLAUDE_STATE\")\" = mismatched ]; then\n"
+            "      echo '  Command: /different/node'\n"
+            "      echo '  Args: /different/server.js'\n"
             "    else\n"
-            "      echo \"  command: $EXPECTED_NODE\"\n"
-            "      echo \"  args: $EXPECTED_SERVER\"\n"
+            "      echo \"  Command: $EXPECTED_NODE\"\n"
+            "      echo \"  Args: $EXPECTED_SERVER\"\n"
             "    fi\n"
+            "    echo '  Environment:'\n"
+            "    echo \"    YOUTUBE_API_KEY=$FAKE_SECRET\"\n"
             "    ;;\n"
-            "  'mcp add') printf '%s\\n' registered >\"$FAKE_CODEX_STATE\" ;;\n"
+            "  'mcp add') printf '%s\\n' registered >\"$FAKE_CLAUDE_STATE\" ;;\n"
             "  *) exit 2 ;;\n"
             "esac\n",
         )
         environment = os.environ.copy()
         environment.update(
             {
-                "CODEX_MCP_CLI": str(fake_bin / "codex"),
+                "CLAUDE_MCP_CLI": str(fake_bin / "claude"),
                 "YOUTUBE_SKILL_HOME": str(self.root),
-                "FAKE_CODEX_CALLS": str(calls),
-                "FAKE_CODEX_STATE": str(state),
+                "FAKE_CLAUDE_CALLS": str(calls),
+                "FAKE_CLAUDE_STATE": str(state),
+                "FAKE_SECRET": FAKE_SECRET,
                 "EXPECTED_NODE": str(install / "runtime/bin/node"),
                 "EXPECTED_SERVER": str(install / "app/dist/stdio-server.js"),
             }
@@ -279,9 +285,9 @@ class PortableLayoutTests(unittest.TestCase):
             "not a directory\n",
         )
 
-    def test_setup_registers_once_and_is_idempotent(self):
+    def test_setup_registers_once_at_user_scope_and_is_idempotent(self):
         install = self.make_install()
-        environment, calls = self.make_fake_codex(install)
+        environment, calls = self.make_fake_claude(install)
 
         first = self.run_setup(environment)
         second = self.run_setup(environment)
@@ -290,18 +296,45 @@ class PortableLayoutTests(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("already registered", second.stdout)
         recorded = calls.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(sum(line.startswith("mcp add youtube") for line in recorded), 1)
+        added = [line for line in recorded if line.startswith("mcp add")]
+        self.assertEqual(len(added), 1)
+        self.assertTrue(added[0].startswith("mcp add --scope user youtube -- "))
 
     def test_setup_refuses_to_replace_a_different_registration(self):
         install = self.make_install()
-        environment, calls = self.make_fake_codex(install, mismatched=True)
+        environment, calls = self.make_fake_claude(install, mismatched=True)
 
         result = self.run_setup(environment)
 
         self.assertEqual(result.returncode, 1)
         self.assertIn("different MCP registration", result.stderr)
         recorded = calls.read_text(encoding="utf-8").splitlines()
-        self.assertFalse(any(line.startswith("mcp add youtube") for line in recorded))
+        self.assertFalse(any(line.startswith("mcp add") for line in recorded))
+
+    def test_setup_fails_when_the_registration_is_not_recorded(self):
+        install = self.make_install()
+        environment, _ = self.make_fake_claude(install)
+        environment["EXPECTED_SERVER"] = "/different/server.js"
+
+        result = self.run_setup(environment)
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("did not record", result.stderr)
+
+    def test_setup_never_prints_the_server_environment(self):
+        install = self.make_install()
+        environment, _ = self.make_fake_claude(install)
+        runs = [self.run_setup(environment), self.run_setup(environment)]
+        environment, _ = self.make_fake_claude(install, mismatched=True)
+        (self.root / "claude-registration").write_text(
+            "mismatched\n", encoding="utf-8"
+        )
+        runs.append(self.run_setup(environment))
+
+        self.assertEqual([run.returncode for run in runs], [0, 0, 1])
+        for run in runs:
+            self.assertNotIn(FAKE_SECRET, run.stdout)
+            self.assertNotIn(FAKE_SECRET, run.stderr)
 
 
 if __name__ == "__main__":
