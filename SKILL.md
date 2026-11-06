@@ -1,264 +1,88 @@
 ---
 name: work-with-youtube
-description: Work with YouTube in Claude Code using MCP-first caption and metadata retrieval, locally saved Gemini video material, structured transcript generation, visual inspection, and long-video chunking. Use for requests to inspect, summarize, query, compare, cite, translate, transcribe, or verify one or more YouTube URLs or videos.
+description: Work with YouTube in Claude Code using MCP captions and metadata first, saved Gemini material second, and new Gemini video requests only for what is still missing. Use for requests to inspect, summarize, query, compare, cite, translate, transcribe, or verify one or more YouTube URLs or videos.
 ---
 
 # Work with YouTube
 
-## Status
+For each video, use sources in this order and stop once the task is answered:
 
-Provisionally installed for Claude Code. The structure and local-only behavior are
-unit tested; a live YouTube/Gemini workflow still needs behavioral validation.
+1. YouTube MCP captions and metadata.
+2. Saved Gemini material.
+3. A new Gemini request, only for what is still missing.
 
-For each video, use every relevant YouTube MCP result first, previously saved
-Gemini material second, and a new Gemini request only for the unresolved need.
-Read [references/contracts.md](references/contracts.md) completely before using
-Gemini.
+## YouTube MCP
 
-## Keep the workflow safe
+Use the native `mcp__youtube__*` tools, loading them with ToolSearch if they are
+deferred. Prefer focused reads: `enhanced-transcript` with `filters.timeRange`
+(seconds) reads part of a video, and `filters.search` finds a phrase. Do not save
+MCP results.
 
-- Keep the portable installation under
-  `${YOUTUBE_SKILL_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers}/youtube`,
-  with disposable files under `work/` and persistent local data under `state/`.
-- Never display, quote, log, or commit API keys. Never run `claude mcp get`
-  without filtering it: it prints `YOUTUBE_API_KEY`. Use `claude mcp list` to
-  check the server. Keep the credential file only
-  at `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/secrets/work-with-youtube.env`, and keep it
-  out of prompts, saved responses, request logs, material indexes, `work/`, and
-  `state/`.
-- Store saved Gemini work only in `$install/state/youtube-video-work/`. Keep
-  disposable request and response files in `$install/work/`.
-- Never edit a saved Gemini response. Use the material index only to find
-  reusable responses; use the request log only to record Gemini requests and
-  their known outcomes.
-- Persist a pending numbered run before every Gemini call. Never duplicate a
-  pending run, silently repeat a finished run, ignore a recorded cooldown, or
-  retry an unchanged terminal request failure.
-- Preserve every routing attempt returned by the router. If the router does not
-  return a terminal result, keep the run pending and invent no outcome.
-- Allow only one write-capable Claude Code session per video. Read-only work can
-  proceed elsewhere, and different videos can be processed concurrently.
-- Run Gemini chunks sequentially.
-
-## Use the registered YouTube MCP
-
-The `youtube` MCP is a persistent user-scope Claude Code registration. Use its
-native `mcp__youtube__*` tools directly, loading them with ToolSearch if they
-are listed as deferred; do not run the local MCP client wrapper during normal
-work. Claude Code starts the stdio server when needed, so no daemon needs to
-remain running.
-
-Machine setup is a one-time operation. If the `youtube` MCP tools are absent,
-obtain permission for the local install and user-level Claude Code configuration
-change, then run:
+If the tools are absent, get the user's permission, run this, and ask them to
+exit and resume the session:
 
 ```sh
 sh "${CLAUDE_SKILL_DIR}/scripts/setup_youtube_mcp.sh"
 ```
 
-Exit and resume the session after setup so that Claude Code loads the new
-server. Do not reinstall or reregister the MCP for each video request. The setup
-script installs and verifies the pinned server before registering it in Claude
-Code. Its lower-level client wrapper exists only for that handshake check.
+## Saved Gemini material
 
-Bash calls do not share shell variables. Start each command that uses local
-Gemini state with:
+Reusable answers live in one folder per video:
 
 ```sh
-install=${YOUTUBE_SKILL_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers}/youtube
+ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers/youtube/state/VIDEO_ID"
 ```
 
-Paginate broad MCP transcript reads with `offset` and `maxSegments`; prefer
-focused queries.
+Files are named `TYPE-START-END.EXT`, with times in seconds. `TYPE` is
+`transcript` (`.json`), or `summary`, `visuals`, or `onscreen-text` (`.md`). If a
+file covers the time you need, read it and do not call Gemini. A `.partial` file
+is an incomplete answer; do not rely on it.
 
-## Resolve the task in source order
+## Gemini
 
-1. Normalize each URL to its YouTube video ID.
-2. Ask the MCP for every relevant caption, transcript-research, metadata, or
-   other applicable result. If this satisfies the task, answer from it and
-   stop. Keep MCP results temporary; do not copy them into the Gemini material
-   index.
-3. For anything still missing, search the video's saved Gemini material.
-4. Reuse sufficient verified material. Plan a Gemini request only for returned
-   missing time ranges or sensory information absent from both earlier sources.
-5. Process videos independently before comparing or synthesizing them.
+Gemini is the eyes and ears for what captions lack, such as a board, a slide, or
+a video without captions. Ask it what is visible or audible, and do the reasoning
+yourself.
 
-## Search saved Gemini material
-
-Use `scripts/saved_gemini_responses.py` and the local filenames and JSON fields
-defined in the contract.
-
-1. Set `material_dir="$install/state/youtube-video-work"`, create it if needed,
-   and run `locate --video VIDEO` to obtain the exact local filenames.
-2. If the index is absent, enumerate that video's saved-response filenames.
-   Rebuild the index when responses exist. Initialize an empty index only after
-   confirming that none exist.
-3. Build a query for the video, controlled output type and format, and requested
-   half-open millisecond ranges. Run `find-material` against the local index.
-4. Run `verify-selected` against `material_dir`. Replan around stale or invalid
-   local files before generating anything new.
-5. Run `plan-missing-ranges` only after verification. Do not construct a
-   Gemini request for covered time.
-
-Reusable material has exactly four output types:
-
-- `transcript`: `gemini-transcript` version `1`, checked mechanically.
-- `summary`, `systematic_visual_description`, and
-  `systematic_onscreen_text`: `gemini-free-form-text` version `1`, admitted
-  to the index only after Claude review and conservative assignment of covered
-  time within the requested source range.
-
-When rebuilding an index, supply explicit admission decisions for every
-free-form response as defined in the contract. Keep structurally invalid
-transcript responses saved but unindexed.
-
-Do not save or search translations. Translate on demand in Claude from MCP
-material or saved source-language transcripts and onscreen text. Preserve
-multilingual evidence in the source content itself.
-
-## Use Gemini for the remaining video access
-
-Use Gemini as a video sensor and keep reasoning in Claude. Prefer prompts that
-ask Gemini to report what is visible or audible: a board, slide, onscreen text,
-scene, action, or other specific evidence.
-
-Classify the requested result before building it:
-
-- `video_material`: systematic source material worth reusing. Save it under
-  one controlled output type.
-- `task_specific_observation`: narrow sensory evidence for the current task.
-  Return it to Claude and do not save its response text.
-- `direct_answer`: Gemini's task-specific answer, used only when actually
-  wanted. Return it without saving its response text.
-
-Do not turn a narrow question into reusable material merely to retain it.
-Successful one-time requests still receive a verified request-log outcome.
-
-## Plan only missing video ranges
-
-Split a verified missing-range plan with `plan-chunks`. Use the transcript and
-general-analysis chunk sizes and overlaps defined in the contract:
+Transcript of a clip, saved for reuse:
 
 ```sh
-python3 "${CLAUDE_SKILL_DIR}/scripts/saved_gemini_responses.py" plan-chunks \
-  --missing-ranges-plan MISSING_RANGES_JSON \
-  --chunk-seconds CHUNK_SECONDS \
-  --overlap-seconds OVERLAP_SECONDS \
-  --output CHUNK_PLAN_JSON
+python3 "${CLAUDE_SKILL_DIR}/scripts/gemini_video.py" \
+  --video-url URL --start 0 --end 600 --transcript \
+  --output "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers/youtube/state/VIDEO_ID/transcript-0-600.json"
 ```
 
-Build each returned chunk with one of these routes:
+A one-off question prints its answer and saves nothing:
 
 ```sh
-python3 "${CLAUDE_SKILL_DIR}/scripts/build_gemini_chunk_request.py" \
-  --video-url VIDEO_URL --start-seconds START --end-seconds END \
-  --transcript-only --output REQUEST_JSON
+python3 "${CLAUDE_SKILL_DIR}/scripts/gemini_video.py" \
+  --video-url URL --start 120 --end 180 --prompt "What is written on the board?"
 ```
 
-```sh
-python3 "${CLAUDE_SKILL_DIR}/scripts/build_gemini_chunk_request.py" \
-  --video-url VIDEO_URL --start-seconds START --end-seconds END \
-  --prompt PROMPT --max-output-tokens 8192 --output REQUEST_JSON
-```
+For reusable material, add `--output` with the same naming, and save only what is
+worth reusing.
 
-Use the `8192` allowance for reusable free-form video material. After the call,
-inspect Gemini's `finishReason`; save a `MAX_TOKENS` response as run evidence
-but do not admit it to the material index. Build a changed request with a
-smaller time range rather than repeating it unchanged.
+The script tries the primary key, moves to the fallback when a key is rate
+limited or rejected, and rests a rate-limited key until Gemini says it can be
+used again. If every key is resting it reports the wait; do not retry sooner.
 
-Transcript mode requests only audible linguistic content in the original
-language and native script. Its timestamps, every millisecond range, and every
-chunk boundary are offsets from the beginning of the video.
+Long videos go in clips, one at a time: 600 seconds with a 4-second overlap for
+transcripts, 1800 seconds otherwise. Start with one clip and continue only if it
+works. If a clip fails or returns an incomplete answer, use a smaller clip, not
+the same request again. Timestamps count from the start of the video.
 
-Start long-video work with one representative clip and continue sequentially
-only after it succeeds. If video ingestion or output fails, reduce the chunk
-size instead of assuming the documented default is an API limit.
+Each call costs quota, so check the saved folder first and do not repeat a call
+that succeeded.
 
-If transcript output is incomplete or truncated, save it and index only the
-mechanically checked covered range. Plan smaller clips for the remaining range.
-Never repeat the identical request as truncation handling.
+## Keys
 
-## Load Gemini credentials privately
+Never display, log, or commit a key, and never ask the user to paste one. Gemini
+keys are in `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/secrets/work-with-youtube.env`.
+Do not run `claude mcp get youtube`, which prints `YOUTUBE_API_KEY`; use
+`claude mcp list`.
 
-The router reads required `GEMINI_API_KEY` and optional
-`GEMINI_API_KEY_FALLBACK` from
-`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/secrets/work-with-youtube.env` after request
-verification. The `secrets/` directory must have mode `0700`; the file must
-have mode `0600`, be a regular file owned by the current user, and contain only
-`NAME=VALUE` lines for those two fields. Explicit process-environment values
-override the file for temporary use. Never ask the user to paste a key into
-chat, print either value, put a value in a command argument, or save credentials
-under the repository or portable runtime.
+## Answering
 
-When both keys are present, try the primary project first. Use the fallback
-sequentially only after the primary is rate-limited, rejected as an invalid
-credential, or placed in cooldown after exhausted transient retries. Do not
-fail over for a terminal request error such as an invalid request.
-
-## Run one logged Gemini request
-
-Use `scripts/gemini_request_log.py` for the per-video request log in
-`$install/state/youtube-video-work/`.
-
-1. Run `locate --video VIDEO` and look up the exact request-log filename.
-   Initialize a log only after confirming that no exact-name file exists.
-2. Recheck saved material immediately before the call. Stop if nothing remains
-   missing.
-3. Build the exact request, then run `start-run`. Use `--transcript` for
-   transcript mode; otherwise declare the content class and, for reusable
-   material, its controlled output type and format. Add `--retry-reason` only
-   when the user deliberately authorizes another run.
-4. Persist the pending request log locally before invoking the router.
-5. Run the router with the same request log, request ID, run number, endpoint,
-   model, method, and exact request file:
-
-```sh
-python3 "${CLAUDE_SKILL_DIR}/scripts/gemini_request.py" \
-  --request REQUEST_JSON \
-  --response RESPONSE_JSON \
-  --router-result ROUTER_RESULT_JSON \
-  --request-log REQUEST_LOG_JSON \
-  --request-id REQUEST_ID \
-  --run-number RUN_NUMBER \
-  --state "$install/state/gemini-keypool-state.json"
-```
-
-6. For a returned terminal failure, run `finish-run` with the router result and
-   save no response.
-7. For successful `video_material`, run `save-response` into `material_dir`,
-   then run `finish-run` with that saved response. Add checked or reviewed
-   material to the local index afterward. Never index malformed transcript
-   output, unreviewed free-form output, or free-form output whose
-   `finishReason` is not `STOP`.
-8. For successful one-time content, run `finish-run` with the router result
-   and exact local response file. It records that response storage was
-   deliberately omitted. Do not retain the response text.
-
-The log keeps one logical request with numbered authorized runs. Each run keeps
-its own exact request hash, authorization, returned routing attempts, cooldown,
-status, and saved-response reference when applicable. Earlier runs are never
-overwritten.
-
-## Resolve an interrupted pending run
-
-Never infer an outcome from elapsed time.
-
-1. Ask the user to confirm that the earlier write-capable session stopped.
-2. For reusable material, enumerate every local saved response that
-   could claim the pending run, then pass every candidate path to `finish-run`
-   with both interruption confirmations. The command completes the run only
-   when exactly one file verifies the request ID, run number, exact request
-   hash, response bytes, and router result.
-3. If no exact response exists, or the interrupted run requested one-time
-   content, use `mark-run-interrupted` only after confirmation. Any later run
-   still requires explicit retry authorization.
-4. If multiple responses claim the run or any binding conflicts, stop and
-   investigate.
-
-## Deliver the answer
-
-- Cite caption-derived claims with timestamped YouTube links.
-- Label Gemini-derived observations and include timestamps when available.
-- Distinguish direct observation, inference, and uncertainty.
-- State when only part of a long video was processed.
-- Mention saved-material reuse when it prevented a Gemini call.
+Cite captions with timestamped YouTube links. Label what came from Gemini.
+Separate observation from inference, and say when only part of a video was
+processed.
