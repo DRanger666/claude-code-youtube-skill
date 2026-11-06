@@ -136,13 +136,13 @@ class PortableLayoutTests(unittest.TestCase):
             {"app", "runtime", "state", "work", "README.md", "VERSION"},
         )
 
-    def test_default_install_lives_under_codex_home_mcp_servers(self):
-        codex_home = self.root / "codex-home"
-        install_parent = codex_home / "mcp-servers"
+    def test_default_install_lives_under_claude_config_dir_mcp_servers(self):
+        claude_config_dir = self.root / "claude-config"
+        install_parent = claude_config_dir / "mcp-servers"
         install = self.make_install(install_parent)
         environment = os.environ.copy()
         environment.pop("YOUTUBE_SKILL_HOME", None)
-        environment["CODEX_HOME"] = str(codex_home)
+        environment["CLAUDE_CONFIG_DIR"] = str(claude_config_dir)
 
         result = subprocess.run(
             ["sh", str(INSTALLER)],
@@ -237,7 +237,6 @@ class PortableLayoutTests(unittest.TestCase):
         environment.update(
             {
                 "PATH": f"{fake_bin}{os.pathsep}{environment['PATH']}",
-                "CODEX_PRIMARY_RUNTIME_NODE": str(fake_bin / "node"),
                 "NPM_CONFIG_CACHE": str(inherited_cache),
                 "INHERITED_NPM_CACHE": str(inherited_cache),
                 "FAKE_INSTALL_PARENT": str(install_parent),

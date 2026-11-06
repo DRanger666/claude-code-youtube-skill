@@ -8,7 +8,7 @@ MCP_VERSION=1.2.0
 NODE_VERSION=v24.14.0
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-default_parent=${YOUTUBE_SKILL_HOME:-${CODEX_HOME:-$HOME/.codex}/mcp-servers}
+default_parent=${YOUTUBE_SKILL_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers}
 search_root=$default_parent
 install_parent=$default_parent
 
@@ -122,10 +122,7 @@ git -C "$portable/app" remote add origin "$MCP_REPOSITORY"
 git -C "$portable/app" fetch -q --depth 1 origin "$MCP_COMMIT"
 git -C "$portable/app" checkout -q --detach FETCH_HEAD
 
-node_source=${CODEX_PRIMARY_RUNTIME_NODE:-}
-if [ ! -x "$node_source" ] || [ "$("$node_source" --version 2>/dev/null || true)" != "$NODE_VERSION" ]; then
-  node_source=$(command -v node || true)
-fi
+node_source=$(command -v node || true)
 
 if [ -x "$node_source" ] && [ "$("$node_source" --version)" = "$NODE_VERSION" ]; then
   cp "$node_source" "$portable/runtime/bin/node"
@@ -168,7 +165,7 @@ printf '%s\n' \
 printf '%s\n' \
   '# YouTube MCP Portable' \
   '' \
-  'Pinned YouTube MCP installation for Codex.' \
+  'Pinned YouTube MCP installation for Claude Code.' \
   '' \
   '- `app/`: source, dependencies, and build' \
   '- `runtime/`: bundled Node.js runtime' \
