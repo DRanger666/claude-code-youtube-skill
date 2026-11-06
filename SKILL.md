@@ -15,8 +15,31 @@ For each video, use sources in this order and stop once the task is answered:
 
 Use the native `mcp__youtube__*` tools, loading them with ToolSearch if they are
 deferred. Prefer focused reads: `enhanced-transcript` with `filters.timeRange`
-(seconds) reads part of a video, and `filters.search` finds a phrase. Do not save
-MCP results.
+(seconds) reads part of a video, and `filters.search` finds a phrase.
+
+Always pass `language`, set to the language spoken in the video. With no language
+the server can return a dubbed track, and with a language that has no track it
+silently returns a machine translation. Get the spoken language with:
+
+```sh
+node="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers/youtube/runtime/bin/node"
+"$node" "${CLAUDE_SKILL_DIR}/scripts/save_captions.mjs" VIDEO_ID
+```
+
+Work from the spoken language even when it is not English. If the user wants
+another language, translate from those captions yourself rather than asking
+YouTube for a translation.
+
+Captions can be fetched again at no cost, so do not store them for later use.
+When the user wants a transcript kept, save it where they ask with the same
+script, which writes timestamped paragraphs and never translates:
+
+```sh
+"$node" "${CLAUDE_SKILL_DIR}/scripts/save_captions.mjs" VIDEO_ID OUTPUT.md
+```
+
+If the script refuses, it names the captions that exist. Use a Gemini transcript,
+or ask the user which captions to use.
 
 If the tools are absent, get the user's permission, run this, and ask them to
 exit and resume the session:
