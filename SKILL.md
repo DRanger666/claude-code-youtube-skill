@@ -35,6 +35,7 @@ When the user wants a transcript kept, save it where they ask with the same
 script, which writes timestamped paragraphs and never translates:
 
 ```sh
+node="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers/youtube/runtime/bin/node"
 "$node" "${CLAUDE_SKILL_DIR}/scripts/save_captions.mjs" VIDEO_ID OUTPUT.md
 ```
 
