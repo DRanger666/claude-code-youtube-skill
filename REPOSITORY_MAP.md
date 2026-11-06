@@ -5,7 +5,7 @@
 | Concern | Owning source |
 |---|---|
 | Purpose, architecture, installation, and development | [`README.md`](README.md) |
-| Runtime source order and Codex procedure | [`SKILL.md`](SKILL.md) |
+| Runtime source order and Claude Code procedure | [`SKILL.md`](SKILL.md) |
 | Exact paths, pins, formats, and operating values | [`references/contracts.md`](references/contracts.md) |
 | Executable behavior | `scripts/` |
 | Behavioral verification | `tests/` |
@@ -15,9 +15,9 @@
 
 | Path | Role |
 |---|---|
-| [`SKILL.md`](SKILL.md) | Codex skill entry point and runtime workflow. |
+| [`SKILL.md`](SKILL.md) | Claude Code skill entry point and runtime workflow. |
 | [`references/contracts.md`](references/contracts.md) | Exact local-state, MCP, Gemini, saved-response, index, and request-log contracts. |
-| [`scripts/setup_youtube_mcp.sh`](scripts/setup_youtube_mcp.sh) | Performs the one-time install and persistent Codex MCP registration. |
+| [`scripts/setup_youtube_mcp.sh`](scripts/setup_youtube_mcp.sh) | Performs the one-time install and persistent Claude Code MCP registration. |
 | [`scripts/ensure_youtube_mcp.sh`](scripts/ensure_youtube_mcp.sh) | Installs and verifies the pinned portable YouTube MCP runtime. |
 | [`scripts/call_youtube_mcp.mjs`](scripts/call_youtube_mcp.mjs) | Performs the setup-time MCP handshake check. |
 | [`scripts/build_gemini_chunk_request.py`](scripts/build_gemini_chunk_request.py) | Builds timestamp-bounded Gemini video requests. |
@@ -30,7 +30,7 @@
 
 | Path | Role |
 |---|---|
-| [`tests/test_portable_layout.py`](tests/test_portable_layout.py) | Portable MCP installation and Codex registration tests. |
+| [`tests/test_portable_layout.py`](tests/test_portable_layout.py) | Portable MCP installation and Claude Code registration tests. |
 | [`tests/test_transcript_request.py`](tests/test_transcript_request.py) | Gemini request-builder tests. |
 | [`tests/test_gemini_routing.py`](tests/test_gemini_routing.py) | Environment credentials, routing, cooldown, and secret-safety tests. |
 | [`tests/test_gemini_request_log.py`](tests/test_gemini_request_log.py) | Local request-log state-machine tests. |
