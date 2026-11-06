@@ -8,7 +8,7 @@ workflow.
 ## Contents
 
 - [Local installation](#local-installation)
-- [Codex MCP registration](#codex-mcp-registration)
+- [Claude Code MCP registration](#claude-code-mcp-registration)
 - [Local state and credentials](#local-state-and-credentials)
 - [Gemini requests](#gemini-requests)
 - [Long-video clipping](#long-video-clipping)
@@ -22,7 +22,7 @@ workflow.
 ## Local installation
 
 Use this exact no-space layout under
-`${YOUTUBE_SKILL_HOME:-${CODEX_HOME:-$HOME/.codex}/mcp-servers}`:
+`${YOUTUBE_SKILL_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers}`:
 
 ```text
 youtube/
@@ -47,21 +47,32 @@ Pinned implementation:
 - Node: `v24.14.0`
 - Platform: `linux-x86_64`
 
-## Codex MCP registration
+## Claude Code MCP registration
 
 Run `scripts/setup_youtube_mcp.sh` once per machine. It installs and verifies
-the pinned server, then creates this persistent user-level Codex registration:
+the pinned server, then creates this persistent user-scope registration:
 
 - Name: `youtube`
 - Transport: `stdio`
+- Scope: `user`
 - Command: `<install>/runtime/bin/node`
 - Argument: `<install>/app/dist/stdio-server.js`
-- Configuration: `${CODEX_HOME:-$HOME/.codex}/config.toml`
+- Configuration: `~/.claude.json`
+- Tool names: `mcp__youtube__<tool>`
 
-Codex starts the registered stdio process on demand. Normal skill use calls the
-native `youtube` MCP tools directly and does not reinstall the server. The
-`scripts/call_youtube_mcp.mjs` client is reserved for the setup-time handshake
-check performed by `scripts/ensure_youtube_mcp.sh`.
+Claude Code starts the registered stdio process on demand. Normal skill use
+calls the native `youtube` MCP tools directly and does not reinstall the server.
+The `scripts/call_youtube_mcp.mjs` client is reserved for the setup-time
+handshake check performed by `scripts/ensure_youtube_mcp.sh`.
+
+`claude mcp get youtube` prints the server's environment values. Setup keeps
+that output private, and no session may display it unfiltered. `claude mcp list`
+shows the connection status without them.
+
+`YOUTUBE_API_KEY` belongs in the registration's `env` block in `~/.claude.json`.
+Add it by editing that file, never through `claude mcp add --env`, which would
+place the value in a command line. An existing registration that matches the
+install is left unchanged, so its key is preserved.
 
 ## Local state and credentials
 
@@ -76,7 +87,7 @@ three filename forms are:
 ```
 
 The private file
-`${CODEX_HOME:-$HOME/.codex}/secrets/work-with-youtube.env` supplies required
+`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/secrets/work-with-youtube.env` supplies required
 `GEMINI_API_KEY` and optional `GEMINI_API_KEY_FALLBACK`. Its directory mode is
 `0700`; its file mode is `0600`. It is a regular file owned by the current user
 and contains only `NAME=VALUE` lines for those two fields. When both are set,
@@ -197,16 +208,16 @@ deliberately asymmetric:
 | `outputType` | `outputFormat` | Validation |
 | --- | --- | --- |
 | `transcript` | `gemini-transcript` version `1` | Deterministic structured check |
-| `summary` | `gemini-free-form-text` version `1` | Codex review before indexing |
-| `systematic_visual_description` | `gemini-free-form-text` version `1` | Codex review before indexing |
-| `systematic_onscreen_text` | `gemini-free-form-text` version `1` | Codex review before indexing |
+| `summary` | `gemini-free-form-text` version `1` | Claude review before indexing |
+| `systematic_visual_description` | `gemini-free-form-text` version `1` | Claude review before indexing |
+| `systematic_onscreen_text` | `gemini-free-form-text` version `1` | Claude review before indexing |
 
 Reject any other type, format, or type-format pairing. Transcript uses the
 original spoken language and native script. Systematic onscreen text preserves
 the text and script visible in the video. All `startMs` and `endMs` values are
 millisecond offsets from the beginning of the YouTube video. The `MM:SS.mmm`
 fields defined by `gemini-transcript` version `1` represent the same video-start
-offsets. Translate on demand in Codex from saved source-language transcripts
+offsets. Translate on demand in Claude from saved source-language transcripts
 or source onscreen text; do not save or search translation as a reusable Gemini
 output. Do not store a top-level language field or divide material into
 language variants.
@@ -271,7 +282,7 @@ invalid selections before constructing a request.
 
 Every distinct saved response ID is retained even when its type and interval
 match another entry. Transcript coverage comes only from the checker.
-Free-form material requires explicit Codex review and conservative coverage
+Free-form material requires explicit Claude review and conservative coverage
 within its source range.
 
 If the index is missing, enumerate the video's saved-response files. Rebuild

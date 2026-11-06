@@ -1,13 +1,13 @@
 ---
 name: work-with-youtube
-description: Work with YouTube in Codex using MCP-first caption and metadata retrieval, locally saved Gemini video material, structured transcript generation, visual inspection, and long-video chunking. Use for requests to inspect, summarize, query, compare, cite, translate, transcribe, or verify one or more YouTube URLs or videos.
+description: Work with YouTube in Claude Code using MCP-first caption and metadata retrieval, locally saved Gemini video material, structured transcript generation, visual inspection, and long-video chunking. Use for requests to inspect, summarize, query, compare, cite, translate, transcribe, or verify one or more YouTube URLs or videos.
 ---
 
 # Work with YouTube
 
 ## Status
 
-Provisionally installed for Codex. The structure and local-only behavior are
+Provisionally installed for Claude Code. The structure and local-only behavior are
 unit tested; a live YouTube/Gemini workflow still needs behavioral validation.
 
 For each video, use every relevant YouTube MCP result first, previously saved
@@ -18,10 +18,12 @@ Gemini.
 ## Keep the workflow safe
 
 - Keep the portable installation under
-  `${YOUTUBE_SKILL_HOME:-${CODEX_HOME:-$HOME/.codex}/mcp-servers}/youtube`,
+  `${YOUTUBE_SKILL_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers}/youtube`,
   with disposable files under `work/` and persistent local data under `state/`.
-- Never display, quote, log, or commit API keys. Keep the credential file only
-  at `${CODEX_HOME:-$HOME/.codex}/secrets/work-with-youtube.env`, and keep it
+- Never display, quote, log, or commit API keys. Never run `claude mcp get`
+  without filtering it: it prints `YOUTUBE_API_KEY`. Use `claude mcp list` to
+  check the server. Keep the credential file only
+  at `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/secrets/work-with-youtube.env`, and keep it
   out of prompts, saved responses, request logs, material indexes, `work/`, and
   `state/`.
 - Store saved Gemini work only in `$install/state/youtube-video-work/`. Keep
@@ -34,34 +36,36 @@ Gemini.
   retry an unchanged terminal request failure.
 - Preserve every routing attempt returned by the router. If the router does not
   return a terminal result, keep the run pending and invent no outcome.
-- Allow only one write-capable Codex session per video. Read-only work can
+- Allow only one write-capable Claude Code session per video. Read-only work can
   proceed elsewhere, and different videos can be processed concurrently.
 - Run Gemini chunks sequentially.
 
 ## Use the registered YouTube MCP
 
-The `youtube` MCP is a persistent user-level Codex registration. Use its native
-tools directly; do not run the local MCP client wrapper during normal work.
-Codex starts the stdio server when needed, so no daemon needs to remain running.
+The `youtube` MCP is a persistent user-scope Claude Code registration. Use its
+native `mcp__youtube__*` tools directly, loading them with ToolSearch if they
+are listed as deferred; do not run the local MCP client wrapper during normal
+work. Claude Code starts the stdio server when needed, so no daemon needs to
+remain running.
 
 Machine setup is a one-time operation. If the `youtube` MCP tools are absent,
-obtain permission for the local install and user-level Codex configuration
+obtain permission for the local install and user-level Claude Code configuration
 change, then run:
 
 ```sh
-sh "$skill_dir/scripts/setup_youtube_mcp.sh"
+sh "${CLAUDE_SKILL_DIR}/scripts/setup_youtube_mcp.sh"
 ```
 
-Reload Codex after setup—for example, exit and resume the same thread—so it
-reloads the MCP configuration. A new conversation is not required. Do not
-reinstall or reregister the MCP for each video request. The setup script
-installs and verifies the pinned server before registering it in Codex. Its
-lower-level client wrapper exists only for that handshake check.
+Exit and resume the session after setup so that Claude Code loads the new
+server. Do not reinstall or reregister the MCP for each video request. The setup
+script installs and verifies the pinned server before registering it in Claude
+Code. Its lower-level client wrapper exists only for that handshake check.
 
-For local Gemini state, set:
+Bash calls do not share shell variables. Start each command that uses local
+Gemini state with:
 
 ```sh
-install=${YOUTUBE_SKILL_HOME:-${CODEX_HOME:-$HOME/.codex}/mcp-servers}/youtube
+install=${YOUTUBE_SKILL_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers}/youtube
 ```
 
 Paginate broad MCP transcript reads with `offset` and `maxSegments`; prefer
@@ -101,20 +105,20 @@ Reusable material has exactly four output types:
 - `transcript`: `gemini-transcript` version `1`, checked mechanically.
 - `summary`, `systematic_visual_description`, and
   `systematic_onscreen_text`: `gemini-free-form-text` version `1`, admitted
-  to the index only after Codex review and conservative assignment of covered
+  to the index only after Claude review and conservative assignment of covered
   time within the requested source range.
 
 When rebuilding an index, supply explicit admission decisions for every
 free-form response as defined in the contract. Keep structurally invalid
 transcript responses saved but unindexed.
 
-Do not save or search translations. Translate on demand in Codex from MCP
+Do not save or search translations. Translate on demand in Claude from MCP
 material or saved source-language transcripts and onscreen text. Preserve
 multilingual evidence in the source content itself.
 
 ## Use Gemini for the remaining video access
 
-Use Gemini as a video sensor and keep reasoning in Codex. Prefer prompts that
+Use Gemini as a video sensor and keep reasoning in Claude. Prefer prompts that
 ask Gemini to report what is visible or audible: a board, slide, onscreen text,
 scene, action, or other specific evidence.
 
@@ -123,7 +127,7 @@ Classify the requested result before building it:
 - `video_material`: systematic source material worth reusing. Save it under
   one controlled output type.
 - `task_specific_observation`: narrow sensory evidence for the current task.
-  Return it to Codex and do not save its response text.
+  Return it to Claude and do not save its response text.
 - `direct_answer`: Gemini's task-specific answer, used only when actually
   wanted. Return it without saving its response text.
 
@@ -136,7 +140,7 @@ Split a verified missing-range plan with `plan-chunks`. Use the transcript and
 general-analysis chunk sizes and overlaps defined in the contract:
 
 ```sh
-python3 "$skill_dir/scripts/saved_gemini_responses.py" plan-chunks \
+python3 "${CLAUDE_SKILL_DIR}/scripts/saved_gemini_responses.py" plan-chunks \
   --missing-ranges-plan MISSING_RANGES_JSON \
   --chunk-seconds CHUNK_SECONDS \
   --overlap-seconds OVERLAP_SECONDS \
@@ -146,13 +150,13 @@ python3 "$skill_dir/scripts/saved_gemini_responses.py" plan-chunks \
 Build each returned chunk with one of these routes:
 
 ```sh
-python3 "$skill_dir/scripts/build_gemini_chunk_request.py" \
+python3 "${CLAUDE_SKILL_DIR}/scripts/build_gemini_chunk_request.py" \
   --video-url VIDEO_URL --start-seconds START --end-seconds END \
   --transcript-only --output REQUEST_JSON
 ```
 
 ```sh
-python3 "$skill_dir/scripts/build_gemini_chunk_request.py" \
+python3 "${CLAUDE_SKILL_DIR}/scripts/build_gemini_chunk_request.py" \
   --video-url VIDEO_URL --start-seconds START --end-seconds END \
   --prompt PROMPT --max-output-tokens 8192 --output REQUEST_JSON
 ```
@@ -178,7 +182,7 @@ Never repeat the identical request as truncation handling.
 
 The router reads required `GEMINI_API_KEY` and optional
 `GEMINI_API_KEY_FALLBACK` from
-`${CODEX_HOME:-$HOME/.codex}/secrets/work-with-youtube.env` after request
+`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/secrets/work-with-youtube.env` after request
 verification. The `secrets/` directory must have mode `0700`; the file must
 have mode `0600`, be a regular file owned by the current user, and contain only
 `NAME=VALUE` lines for those two fields. Explicit process-environment values
@@ -209,7 +213,7 @@ Use `scripts/gemini_request_log.py` for the per-video request log in
    model, method, and exact request file:
 
 ```sh
-python3 "$skill_dir/scripts/gemini_request.py" \
+python3 "${CLAUDE_SKILL_DIR}/scripts/gemini_request.py" \
   --request REQUEST_JSON \
   --response RESPONSE_JSON \
   --router-result ROUTER_RESULT_JSON \
