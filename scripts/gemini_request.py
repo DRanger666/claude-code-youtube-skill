@@ -128,8 +128,8 @@ def load_state(path):
 
 
 def credentials_path():
-    codex_home = os.environ.get("CODEX_HOME")
-    home = Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    home = Path(config_dir).expanduser() if config_dir else Path.home() / ".claude"
     return home.resolve() / "secrets" / "work-with-youtube.env"
 
 

@@ -133,8 +133,8 @@ class GeminiRouterTests(unittest.TestCase):
         return exit_code, result, transport
 
     def write_credentials(self, primary="file-primary", fallback="file-fallback"):
-        codex_home = self.directory / "codex-home"
-        secrets = codex_home / "secrets"
+        claude_config_dir = self.directory / "claude-config"
+        secrets = claude_config_dir / "secrets"
         secrets.mkdir(parents=True, mode=0o700)
         credentials = secrets / "work-with-youtube.env"
         lines = [f"GEMINI_API_KEY={primary}"]
@@ -142,7 +142,7 @@ class GeminiRouterTests(unittest.TestCase):
             lines.append(f"GEMINI_API_KEY_FALLBACK={fallback}")
         credentials.write_text("\n".join(lines) + "\n", encoding="utf-8")
         credentials.chmod(0o600)
-        return codex_home, credentials
+        return claude_config_dir, credentials
 
     def test_primary_success_is_bound_to_request_run_and_exact_response_bytes(self):
         exit_code, result, transport = self.run_router([response(200)])
@@ -303,13 +303,13 @@ class GeminiRouterTests(unittest.TestCase):
         self.assertEqual(transport.calls[0][1], "environment-primary")
 
     def test_router_uses_persistent_two_key_credential_file(self):
-        codex_home, _ = self.write_credentials()
+        claude_config_dir, _ = self.write_credentials()
         transport = FakeTransport(
             [response(429, "RESOURCE_EXHAUSTED"), response(200)]
         )
         with mock.patch.dict(
             os.environ,
-            {"CODEX_HOME": str(codex_home)},
+            {"CLAUDE_CONFIG_DIR": str(claude_config_dir)},
             clear=True,
         ), mock.patch.object(
             gemini_request, "send_request", transport
@@ -324,11 +324,11 @@ class GeminiRouterTests(unittest.TestCase):
         self.assertNotIn("file-fallback", serialized)
 
     def test_environment_credentials_override_the_persistent_file(self):
-        codex_home, _ = self.write_credentials()
+        claude_config_dir, _ = self.write_credentials()
         with mock.patch.dict(
             os.environ,
             {
-                "CODEX_HOME": str(codex_home),
+                "CLAUDE_CONFIG_DIR": str(claude_config_dir),
                 "GEMINI_API_KEY": "environment-primary",
             },
             clear=True,
@@ -339,11 +339,11 @@ class GeminiRouterTests(unittest.TestCase):
             )
 
     def test_credential_file_requires_private_permissions(self):
-        codex_home, credentials = self.write_credentials()
+        claude_config_dir, credentials = self.write_credentials()
         credentials.chmod(0o644)
         with mock.patch.dict(
             os.environ,
-            {"CODEX_HOME": str(codex_home)},
+            {"CLAUDE_CONFIG_DIR": str(claude_config_dir)},
             clear=True,
         ):
             with self.assertRaisesRegex(SystemExit, "mode 0600"):
@@ -352,18 +352,18 @@ class GeminiRouterTests(unittest.TestCase):
         credentials.parent.chmod(0o755)
         with mock.patch.dict(
             os.environ,
-            {"CODEX_HOME": str(codex_home)},
+            {"CLAUDE_CONFIG_DIR": str(claude_config_dir)},
             clear=True,
         ):
             with self.assertRaisesRegex(SystemExit, "mode 0700"):
                 gemini_request.load_buckets()
 
     def test_credential_file_parser_is_strict_without_disclosing_values(self):
-        codex_home, credentials = self.write_credentials()
+        claude_config_dir, credentials = self.write_credentials()
         credentials.write_text("UNSUPPORTED=do-not-disclose\n", encoding="utf-8")
         with mock.patch.dict(
             os.environ,
-            {"CODEX_HOME": str(codex_home)},
+            {"CLAUDE_CONFIG_DIR": str(claude_config_dir)},
             clear=True,
         ):
             with self.assertRaises(SystemExit) as raised:
