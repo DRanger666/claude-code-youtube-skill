@@ -52,25 +52,41 @@ function clock(seconds) {
   return `${pad(Math.floor(seconds / 60))}:${pad(seconds % 60)}`;
 }
 
-async function main([videoId, output]) {
-  const config = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
-  const library = join(config, 'mcp-servers/youtube/app/node_modules/youtubei.js/dist/src/platform/node.js');
-  const { Innertube } = await import(library);
-  const youtube = await Innertube.create();
-  const info = await youtube.getBasicInfo(videoId, { client: 'ANDROID_VR' });
-  const track = spokenLanguageTrack(
+let youtube;
+
+export async function videoInfo(videoId) {
+  if (!youtube) {
+    const config = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+    const library = join(config, 'mcp-servers/youtube/app/node_modules/youtubei.js/dist/src/platform/node.js');
+    const { Innertube } = await import(library);
+    youtube = Innertube.create();
+  }
+  return (await youtube).getBasicInfo(videoId, { client: 'ANDROID_VR' });
+}
+
+export function trackFor(info) {
+  return spokenLanguageTrack(
     info.captions?.caption_tracks ?? [],
     info.streaming_data?.adaptive_formats ?? [],
   );
-  if (!output) {
-    console.log(track.language_code);
-    return;
-  }
+}
+
+export async function captionEvents(track) {
   const url = new URL(track.base_url);
   url.searchParams.set('fmt', 'json3');
   const response = await fetch(url);
   if (!response.ok) throw new Error(`Caption request failed with HTTP ${response.status}`);
-  const { events = [] } = await response.json();
+  return (await response.json()).events ?? [];
+}
+
+async function main([videoId, output]) {
+  const info = await videoInfo(videoId);
+  const track = trackFor(info);
+  if (!output) {
+    console.log(track.language_code);
+    return;
+  }
+  const events = await captionEvents(track);
   const name = track.name?.text ?? track.language_code;
   writeFileSync(output, formatTranscript(info.basic_info.title, videoId, name, events));
   console.log(`Saved ${name} captions to ${output}`);
