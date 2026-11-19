@@ -94,6 +94,13 @@ about 75 seconds in all between tries; since Gemini can take a minute to refuse
 each one, this can last several minutes. If it then reports "Gemini overloaded",
 try again a few minutes later; other errors repeat, so change the request.
 
+Every request, including one that fails, is recorded as one JSON line in
+`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers/youtube/state/gemini-requests.jsonl`:
+the clip, the settings, each attempt, Gemini's finish reason and token counts,
+and where the answer went. The script's last stderr line before any error
+summarizes it and gives its id. Read the records when a request goes wrong or
+when choosing settings for the next one.
+
 Long videos go in clips, one at a time: 600 seconds with a 4-second overlap for
 transcripts, 1800 seconds otherwise. Start with one clip and continue only if it
 works. If a clip fails or returns an incomplete answer, use a smaller clip, not

@@ -5,16 +5,24 @@ Tries GEMINI_API_KEY, then GEMINI_API_KEY_FALLBACK if the first key is rate
 limited or rejected. A rate-limited key rests until Gemini says it can be used
 again. When Gemini is overloaded or unreachable, it waits and retries with the
 same key, since every key reaches the same model. Prints the answer, or writes
-it to --output. Writes one line per attempt to stderr: the key's name (never
-its value), the HTTP status, the time taken and, for an answer, Gemini's token
-counts, including tokens spent thinking.
+it to --output.
+
+Every request is recorded, as one JSON line in
+~/.claude/mcp-servers/youtube/state/gemini-requests.jsonl: the clip, the
+settings, each attempt (the key's name, never its value), Gemini's finish
+reason and token counts as returned, and where the answer went. stderr gets a
+line per attempt as it happens and a summary at the end; both are made from
+the record, and the summary carries its id.
 """
 
 import argparse
+import functools
 import json
 import os
 import random
 import re
+import secrets
+import signal
 import sys
 import time
 import urllib.error
@@ -22,10 +30,7 @@ import urllib.request
 from pathlib import Path
 
 
-ENDPOINT = (
-    "https://generativelanguage.googleapis.com/v1beta/"
-    "models/gemini-3.6-flash:generateContent"
-)
+MODEL = "gemini-3.6-flash"
 MAX_OUTPUT_TOKENS = 8192
 TIMEOUT_SECONDS = 600
 # Overload spikes last minutes, so the waits are longer than Google's SDK
@@ -108,8 +113,16 @@ TRANSCRIPT_RESPONSE_SCHEMA = {
 }
 
 
+class GeminiError(Exception):
+    """A request that ended without a complete answer; the message says why."""
+
+
 def config_dir():
     return Path(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
+
+
+def state_dir():
+    return config_dir() / "mcp-servers/youtube/state"
 
 
 def load_keys():
@@ -118,13 +131,13 @@ def load_keys():
     if not values:
         path = config_dir() / "secrets/work-with-youtube.env"
         if not path.exists():
-            sys.exit(f"Missing Gemini credentials file: {path}")
+            raise GeminiError(f"Missing Gemini credentials file: {path}")
         for line in path.read_text(encoding="utf-8").splitlines():
             name, _, value = line.partition("=")
             values[name.strip()] = value.strip()
     keys = [(name, values[name]) for name in KEY_NAMES if values.get(name)]
     if not keys:
-        sys.exit("Missing required Gemini credential: GEMINI_API_KEY")
+        raise GeminiError("Missing required Gemini credential: GEMINI_API_KEY")
     return keys
 
 
@@ -144,10 +157,10 @@ def build_request(url, start, end, prompt):
     }
 
 
-def post(key, body):
+def post(key, body, model=MODEL):
     """Send one request and return (HTTP status, decoded JSON)."""
     request = urllib.request.Request(
-        ENDPOINT,
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         data=json.dumps(body).encode("utf-8"),
         headers={"Content-Type": "application/json", "x-goog-api-key": key},
     )
@@ -176,46 +189,30 @@ def log_to_stderr(line):
     print(line, file=sys.stderr, flush=True)
 
 
-def usage_summary(response):
-    """Describe an answer's finish reason and token counts, from usageMetadata.
-    Gemini leaves out counts that are zero."""
-    usage = response.get("usageMetadata", {})
-    finish = (response.get("candidates") or [{}])[0].get("finishReason", "UNKNOWN")
-    by_kind = ", ".join(
-        f"{detail.get('modality', '?').lower()} {detail.get('tokenCount', 0)}"
-        for detail in usage.get("promptTokensDetails", [])
-    )
-    return (
-        f"finish {finish}; tokens: input {usage.get('promptTokenCount', 0)}"
-        + (f" ({by_kind})" if by_kind else "")
-        + f", thinking {usage.get('thoughtsTokenCount', 0)}"
-        + f", answer {usage.get('candidatesTokenCount', 0)}"
-        + f", total {usage.get('totalTokenCount', 0)}"
-    )
-
-
-def call_gemini(keys, body, cooldown_file, send=post, sleep=time.sleep, now=time.time, log=log_to_stderr):
-    """Return the first successful response, moving on from keys that fail or are resting."""
+def call_gemini(keys, body, cooldown_file, attempts, send=post, sleep=time.sleep, now=time.time, log=log_to_stderr):
+    """Return the first successful response, moving on from keys that fail or
+    are resting. Appends each attempt to attempts, and logs it."""
     cooldowns = json.loads(cooldown_file.read_text()) if cooldown_file.exists() else {}
     status, message = None, ""
     for name, key in keys:
         if cooldowns.get(name, 0) > now():
             log(f"{name} skipped: resting for {cooldowns[name] - now():.0f} more seconds")
             continue
-        for attempt in range(RETRIES + 1):
+        for retry in range(RETRIES + 1):
             started = now()
             status, payload = send(key, body)
-            took = f"attempt {attempt + 1} with {name}: {status} in {now() - started:.1f}s"
+            message = "" if status == 200 else payload.get("error", {}).get("message", "")
+            attempts.append({"key": name, "status": status, "seconds": round(now() - started, 1)})
+            if message:
+                attempts[-1]["error"] = message
+            log(attempt_line(len(attempts), attempts[-1]))
             if status == 200:
-                log(f"{took}, {usage_summary(payload)}")
                 return payload
-            message = payload.get("error", {}).get("message", "")
-            log(f"{took}: {message[:200]}")
-            if status in TRANSIENT_STATUSES and attempt < RETRIES:
-                sleep(min(FIRST_RETRY_SECONDS * 2**attempt, MAX_RETRY_SECONDS) + random.uniform(0, 1))
+            if status in TRANSIENT_STATUSES and retry < RETRIES:
+                sleep(min(FIRST_RETRY_SECONDS * 2**retry, MAX_RETRY_SECONDS) + random.uniform(0, 1))
                 continue
             if status in TRANSIENT_STATUSES:
-                sys.exit(
+                raise GeminiError(
                     f"Gemini overloaded or unreachable ({status}) after {RETRIES + 1} attempts: "
                     f"{message}; try again in a few minutes"
                 )
@@ -226,11 +223,11 @@ def call_gemini(keys, body, cooldown_file, send=post, sleep=time.sleep, now=time
             bad_key = status == 400 and "api key" in message.lower()
             if status in KEY_STATUSES or bad_key:
                 break
-            sys.exit(f"Gemini request failed ({status}): {message}")
+            raise GeminiError(f"Gemini request failed ({status}): {message}")
     if status is None or status == 429:
         wait = min(until for until in cooldowns.values() if until > now()) - now()
-        sys.exit(f"Every Gemini key is cooling down; try again in {wait:.0f} seconds")
-    sys.exit(f"Every Gemini key failed; last error ({status}): {message}")
+        raise GeminiError(f"Every Gemini key is cooling down; try again in {wait:.0f} seconds")
+    raise GeminiError(f"Every Gemini key failed; last error ({status}): {message}")
 
 
 def answer_text(response):
@@ -241,7 +238,7 @@ def answer_text(response):
     return text, candidate.get("finishReason", "UNKNOWN")
 
 
-def main():
+def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--video-url", required=True)
     parser.add_argument("--start", required=True, type=int, help="seconds")
@@ -252,11 +249,38 @@ def main():
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if not 0 <= args.start < args.end:
-        sys.exit("Require 0 <= start < end")
+        parser.error("Require 0 <= start < end")
+    return args
 
+
+def new_record(args):
+    """The request as asked; ask() adds what happened."""
+    return {
+        "id": time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(2),
+        "video": args.video_url,
+        "start": args.start,
+        "end": args.end,
+        "mode": "prompt" if args.prompt else "transcript",
+        "prompt": args.prompt,
+        "model": MODEL,
+        "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "attempts": [],
+    }
+
+
+def ask(args, record):
+    """Send the request, save the answer, and fill in the record; raise
+    GeminiError if there is no complete answer."""
     body = build_request(args.video_url, args.start, args.end, args.prompt)
-    cooldown_file = config_dir() / "mcp-servers/youtube/state/gemini-cooldowns.json"
-    text, finish_reason = answer_text(call_gemini(load_keys(), body, cooldown_file))
+    send = functools.partial(post, model=record["model"])
+    response = call_gemini(load_keys(), body, state_dir() / "gemini-cooldowns.json", record["attempts"], send=send)
+    candidate = (response.get("candidates") or [{}])[0]
+    record["finish_reason"] = candidate.get("finishReason", "UNKNOWN")
+    record["usage"] = response.get("usageMetadata", {})
+    for field, name in [("modelVersion", "model_version"), ("responseId", "response_id"), ("promptFeedback", "prompt_feedback")]:
+        if field in response:
+            record[name] = response[field]
+    text, finish_reason = answer_text(response)
     complete = finish_reason == "STOP"
     if args.output is None:
         print(text)
@@ -265,9 +289,70 @@ def main():
         output = args.output if complete else Path(f"{args.output}.partial")
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text + "\n", encoding="utf-8")
+        record["output"] = str(output.resolve())
         print(output)
     if not complete:
-        sys.exit(f"Incomplete answer (finishReason {finish_reason}); use a smaller clip")
+        raise GeminiError(f"Incomplete answer (finishReason {finish_reason}); use a smaller clip")
+
+
+def save_record(record, path):
+    """Append the record as one line. A single write to a file opened for
+    appending lands whole, so requests running at once do not mix lines."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8")
+    descriptor = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(descriptor, line)
+    finally:
+        os.close(descriptor)
+
+
+def attempt_line(number, attempt):
+    line = f"attempt {number} with {attempt['key']}: {attempt['status']} in {attempt['seconds']:.1f}s"
+    return line + (f": {attempt['error'][:200]}" if "error" in attempt else "")
+
+
+def summary_line(record):
+    """One line for people: how the request ended, its settings and its token
+    counts. Gemini leaves out counts that are zero."""
+    line = f"request {record['id']} {record['outcome']} in {record['seconds']:.1f}s; model {record['model']}"
+    if "finish_reason" in record:
+        usage = record["usage"]
+        by_kind = ", ".join(
+            f"{detail.get('modality', '?').lower()} {detail.get('tokenCount', 0)}"
+            for detail in usage.get("promptTokensDetails", [])
+        )
+        line += (
+            f"; finish {record['finish_reason']}; tokens: input {usage.get('promptTokenCount', 0)}"
+            + (f" ({by_kind})" if by_kind else "")
+            + f", thinking {usage.get('thoughtsTokenCount', 0)}"
+            + f", answer {usage.get('candidatesTokenCount', 0)}"
+            + f", total {usage.get('totalTokenCount', 0)}"
+        )
+    return line
+
+
+def stop(signum, frame):
+    raise GeminiError("Stopped by the caller before Gemini answered")
+
+
+def main():
+    args = parse_arguments()
+    # A caller that gives up sends SIGTERM; the request is still recorded.
+    signal.signal(signal.SIGTERM, stop)
+    record = new_record(args)
+    started = time.time()
+    try:
+        ask(args, record)
+        record["outcome"] = "ok"
+    except GeminiError as error:
+        record["outcome"] = "incomplete" if "finish_reason" in record else "failed"
+        record["error"] = str(error)
+    record["seconds"] = round(time.time() - started, 1)
+    save_record(record, state_dir() / "gemini-requests.jsonl")
+    log_to_stderr(summary_line(record))
+    if "error" in record:
+        sys.exit(record["error"])
 
 
 if __name__ == "__main__":

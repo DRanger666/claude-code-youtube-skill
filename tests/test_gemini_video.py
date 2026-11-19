@@ -1,5 +1,7 @@
 import json
 import os
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -37,31 +39,27 @@ class CallGeminiTests(unittest.TestCase):
             return remaining.pop(0)
 
         self.keys_used = keys_used
+        self.attempts = []
         gemini_video.call_gemini(
-            keys, {}, self.cooldown_file, send=send, sleep=self.waits.append, now=lambda: self.time,
-            log=self.logged.append,
+            keys, {}, self.cooldown_file, self.attempts, send=send, sleep=self.waits.append,
+            now=lambda: self.time, log=self.logged.append,
         )
         return keys_used
 
-    def test_each_attempt_is_logged_with_the_answers_token_counts(self):
-        answer = (200, {
-            "candidates": [{"finishReason": "MAX_TOKENS"}],
-            "usageMetadata": {
-                "promptTokenCount": 9000, "thoughtsTokenCount": 2500, "candidatesTokenCount": 5692,
-                "totalTokenCount": 17192,
-                "promptTokensDetails": [{"modality": "VIDEO", "tokenCount": 7000}, {"modality": "AUDIO", "tokenCount": 2000}],
-            },
-        })
-        self.call([RATE_LIMITED, (503, {"error": {"message": "high demand"}}), answer])
+    def test_each_attempt_is_recorded_and_logged(self):
+        self.call([RATE_LIMITED, (503, {"error": {"message": "high demand"}}), OK])
+        self.assertEqual(self.attempts, [
+            {"key": "GEMINI_API_KEY", "status": 429, "seconds": 0.0, "error": "quota"},
+            {"key": "GEMINI_API_KEY_FALLBACK", "status": 503, "seconds": 0.0, "error": "high demand"},
+            {"key": "GEMINI_API_KEY_FALLBACK", "status": 200, "seconds": 0.0},
+        ])
         self.assertEqual(self.logged, [
             "attempt 1 with GEMINI_API_KEY: 429 in 0.0s: quota",
-            "attempt 1 with GEMINI_API_KEY_FALLBACK: 503 in 0.0s: high demand",
-            "attempt 2 with GEMINI_API_KEY_FALLBACK: 200 in 0.0s, finish MAX_TOKENS; tokens: "
-            "input 9000 (video 7000, audio 2000), thinking 2500, answer 5692, total 17192",
+            "attempt 2 with GEMINI_API_KEY_FALLBACK: 503 in 0.0s: high demand",
+            "attempt 3 with GEMINI_API_KEY_FALLBACK: 200 in 0.0s",
         ])
         self.call([OK])
         self.assertRegex(self.logged[0], r"^GEMINI_API_KEY skipped: resting for \d+ more seconds$")
-        self.assertIn("thinking 0, answer 0", self.logged[1])
         for line in self.logged:  # the key values are "first" and "second"
             self.assertNotRegex(line, r"\b(first|second)\b")
 
@@ -85,13 +83,13 @@ class CallGeminiTests(unittest.TestCase):
 
     def test_exhausted_retries_stop_without_trying_the_second_key(self):
         overloaded = (503, {"error": {"message": "high demand"}})
-        with self.assertRaisesRegex(SystemExit, r"^Gemini overloaded or unreachable \(503\) after 5 attempts: high demand; try again in a few minutes$"):
+        with self.assertRaisesRegex(gemini_video.GeminiError, r"^Gemini overloaded or unreachable \(503\) after 5 attempts: high demand; try again in a few minutes$"):
             self.call([overloaded] * 5)
         self.assertEqual(self.keys_used, ["first"] * 5)
         self.assertFalse(self.cooldown_file.exists())
 
     def test_bad_request_stops_without_trying_the_second_key(self):
-        with self.assertRaisesRegex(SystemExit, "bad clip"):
+        with self.assertRaisesRegex(gemini_video.GeminiError, "bad clip"):
             self.call([(400, {"error": {"message": "bad clip"}})])
         self.assertEqual(self.keys_used, ["first"])
 
@@ -113,9 +111,9 @@ class CallGeminiTests(unittest.TestCase):
         self.assertEqual(self.call([OK]), ["first"])
 
     def test_every_key_resting_reports_the_wait_without_sending(self):
-        with self.assertRaisesRegex(SystemExit, "try again in 60 seconds"):
+        with self.assertRaisesRegex(gemini_video.GeminiError, "try again in 60 seconds"):
             self.call([RATE_LIMITED, RATE_LIMITED])
-        with self.assertRaisesRegex(SystemExit, "cooling down"):
+        with self.assertRaisesRegex(gemini_video.GeminiError, "cooling down"):
             self.call([])
         self.assertEqual(self.keys_used, [])
 
@@ -144,35 +142,119 @@ class LoadKeysTests(unittest.TestCase):
 
     def test_missing_file_is_reported(self):
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(SystemExit, "Missing Gemini credentials"):
+            with self.assertRaisesRegex(gemini_video.GeminiError, "Missing Gemini credentials"):
                 self.load({"CLAUDE_CONFIG_DIR": directory})
 
 
-class MainTests(unittest.TestCase):
-    def run_main(self, response, output):
-        arguments = ["gemini_video.py", "--video-url", "https://youtu.be/x", "--start", "0",
-                     "--end", "60", "--transcript", "--output", str(output)]
-        with mock.patch.object(sys, "argv", arguments), \
-                mock.patch.object(gemini_video, "load_keys", return_value=KEYS), \
-                mock.patch.object(gemini_video, "call_gemini", return_value=response):
-            gemini_video.main()
+ANSWER = {
+    "candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+    "usageMetadata": {
+        "promptTokenCount": 9000, "thoughtsTokenCount": 2500, "candidatesTokenCount": 5692,
+        "totalTokenCount": 17192,
+        "promptTokensDetails": [{"modality": "VIDEO", "tokenCount": 7000}, {"modality": "AUDIO", "tokenCount": 2000}],
+    },
+    "modelVersion": "gemini-test",
+    "responseId": "abc",
+}
 
-    def test_complete_answer_is_saved_under_the_requested_name(self):
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "video" / "transcript-0-60.json"
-            with mock.patch("builtins.print"):
-                self.run_main(OK[1], output)
-            self.assertEqual(output.read_text(encoding="utf-8"), "hi\n")
+
+class MainTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.directory = Path(directory.name)
+        self.records = self.directory / "mcp-servers/youtube/state/gemini-requests.jsonl"
+
+    def run_main(self, call_gemini, output=None, extra=()):
+        """Run the script; return its stderr lines and its record."""
+        arguments = ["gemini_video.py", "--video-url", "https://youtu.be/x", "--start", "0",
+                     "--end", "60", "--transcript", *extra]
+        if output:
+            arguments += ["--output", str(output)]
+        logged = []
+        with mock.patch.object(sys, "argv", arguments), \
+                mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.directory)}), \
+                mock.patch.object(gemini_video, "load_keys", return_value=KEYS), \
+                mock.patch.object(gemini_video, "call_gemini", side_effect=call_gemini), \
+                mock.patch.object(gemini_video, "log_to_stderr", logged.append), \
+                mock.patch("builtins.print"):
+            try:
+                gemini_video.main()
+            finally:
+                self.logged = logged
+                self.record = json.loads(self.records.read_text(encoding="utf-8").splitlines()[-1])
+
+    @staticmethod
+    def answering(response):
+        def call_gemini(keys, body, cooldown_file, attempts, **_):
+            attempts.append({"key": "GEMINI_API_KEY", "status": 200, "seconds": 1.0})
+            return response
+        return call_gemini
+
+    def test_complete_answer_is_saved_and_recorded(self):
+        output = self.directory / "video" / "transcript-0-60.json"
+        self.run_main(self.answering(ANSWER), output)
+        self.assertEqual(output.read_text(encoding="utf-8"), "hi\n")
+        record = self.record
+        self.assertRegex(record.pop("id"), r"^\d{8}T\d{6}Z-[0-9a-f]{4}$")
+        self.assertIsInstance(record.pop("seconds"), float)
+        self.assertEqual(record, {
+            "video": "https://youtu.be/x", "start": 0, "end": 60, "mode": "transcript", "prompt": None,
+            "model": gemini_video.MODEL, "max_output_tokens": gemini_video.MAX_OUTPUT_TOKENS,
+            "attempts": [{"key": "GEMINI_API_KEY", "status": 200, "seconds": 1.0}],
+            "finish_reason": "STOP", "usage": ANSWER["usageMetadata"],
+            "model_version": "gemini-test", "response_id": "abc",
+            "output": str(output), "outcome": "ok",
+        })
+        self.assertRegex(self.logged[-1], r"^request \S+ ok in \d+\.\ds; model \S+; finish STOP; tokens: "
+                         r"input 9000 \(video 7000, audio 2000\), thinking 2500, answer 5692, total 17192$")
 
     def test_incomplete_answer_is_saved_only_as_partial(self):
-        response = json.loads(json.dumps(OK[1]))
+        response = json.loads(json.dumps(ANSWER))
         response["candidates"][0]["finishReason"] = "MAX_TOKENS"
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "transcript-0-60.json"
-            with mock.patch("builtins.print"), self.assertRaisesRegex(SystemExit, "MAX_TOKENS"):
-                self.run_main(response, output)
-            self.assertFalse(output.exists())
-            self.assertTrue(Path(f"{output}.partial").exists())
+        output = self.directory / "transcript-0-60.json"
+        with self.assertRaisesRegex(SystemExit, "MAX_TOKENS"):
+            self.run_main(self.answering(response), output)
+        self.assertFalse(output.exists())
+        self.assertTrue(Path(f"{output}.partial").exists())
+        self.assertEqual((self.record["outcome"], self.record["output"]), ("incomplete", f"{output}.partial"))
+
+    def test_a_failed_request_is_recorded_and_its_error_comes_last(self):
+        def overloaded(keys, body, cooldown_file, attempts, **_):
+            attempts.append({"key": "GEMINI_API_KEY", "status": 503, "seconds": 2.0, "error": "high demand"})
+            raise gemini_video.GeminiError("Gemini overloaded")
+        with self.assertRaisesRegex(SystemExit, "^Gemini overloaded$"):
+            self.run_main(overloaded)
+        self.assertEqual(self.record["outcome"], "failed")
+        self.assertEqual(self.record["error"], "Gemini overloaded")
+        self.assertEqual(len(self.record["attempts"]), 1)
+        self.assertRegex(self.logged[-1], r"^request \S+ failed in \d+\.\ds; model \S+$")
+
+    def test_a_request_stopped_by_the_caller_is_still_recorded(self):
+        waiting = (
+            "import sys, time\n"
+            f"sys.path.insert(0, {str(Path(gemini_video.__file__).parent)!r})\n"
+            "import gemini_video\n"
+            "gemini_video.load_keys = lambda: [('GEMINI_API_KEY', 'k')]\n"
+            "gemini_video.post = lambda key, body, model: (print('sent', flush=True), time.sleep(30))\n"
+            "sys.argv = ['gemini_video.py', '--video-url', 'https://youtu.be/x', '--start', '0', '--end', '60', '--transcript']\n"
+            "gemini_video.main()\n"
+        )
+        child = subprocess.Popen([sys.executable, "-c", waiting], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 text=True, env={**os.environ, "CLAUDE_CONFIG_DIR": str(self.directory)})
+        self.assertEqual(child.stdout.readline(), "sent\n")
+        child.send_signal(signal.SIGTERM)
+        _, stderr = child.communicate(timeout=10)
+        self.assertEqual(child.returncode, 1)
+        self.assertEqual(stderr.splitlines()[-1], "Stopped by the caller before Gemini answered")
+        record = json.loads(self.records.read_text(encoding="utf-8"))
+        self.assertEqual((record["outcome"], record["error"]), ("failed", "Stopped by the caller before Gemini answered"))
+
+    def test_requests_add_lines_to_one_file(self):
+        self.run_main(self.answering(ANSWER))
+        self.run_main(self.answering(ANSWER))
+        self.assertEqual(len(self.records.read_text(encoding="utf-8").splitlines()), 2)
+        self.assertEqual(self.records.stat().st_mode & 0o777, 0o600)
 
 
 class BuildRequestTests(unittest.TestCase):

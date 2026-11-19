@@ -42,6 +42,21 @@ The fallback is optional. Gemini quota is per Google Cloud project, so it adds
 capacity only if it comes from a different project than the primary. It does
 not help when Gemini is overloaded, since both keys reach the same model.
 
+## Request records
+
+Every Gemini request is recorded as one JSON line in
+`~/.claude/mcp-servers/youtube/state/gemini-requests.jsonl` (mode `0600`), by
+Claude Code and by the [web connector](https://github.com/DRanger666/claude-web-youtube-connector)
+alike, since both run the same script. A record holds the clip, the prompt, the
+model and settings, each attempt (key name, HTTP status, time, error), Gemini's
+finish reason, `usageMetadata` exactly as returned, and the path of the saved
+answer. For example, the token counts of the last ten requests:
+
+```sh
+tail -n 10 ~/.claude/mcp-servers/youtube/state/gemini-requests.jsonl \
+  | jq -c '{id, outcome, finish_reason, usage: .usage | {promptTokenCount, thoughtsTokenCount, candidatesTokenCount}}'
+```
+
 ## Development
 
 ```sh
