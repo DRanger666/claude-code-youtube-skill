@@ -86,8 +86,8 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/gemini_video.py" \
 For reusable material, add `--output` with the same naming, and save only what is
 worth reusing.
 
-The defaults suit a first request: the model in the script, the model's own
-thinking level, and no output limit below the model's maximum. Settings exist
+The defaults suit a first request: `gemini-4-hydrogen`, thinking level
+`medium`, and no output limit below the model's maximum. Settings exist
 so that you and the user can learn what each kind of request needs, so change
 them for a reason, tell the user what you changed and why, and put the reason
 in `--note`, which the record keeps:

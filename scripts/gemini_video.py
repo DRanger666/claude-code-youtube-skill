@@ -31,10 +31,11 @@ import urllib.request
 from pathlib import Path
 
 
-# Defaults for the settings a caller can choose. Without --thinking-level the
-# model uses its own default; without --max-output-tokens, its own maximum.
-MODEL = "gemini-3.6-flash"
-THINKING_LEVEL = None
+# Defaults for the settings a caller can choose. Without --max-output-tokens
+# the limit is the model's own maximum. gemini-4-hydrogen thinks at "high"
+# unless told otherwise; "medium" is where we start, to adjust from records.
+MODEL = "gemini-4-hydrogen"
+THINKING_LEVEL = "medium"
 THINKING_LEVELS = ("minimal", "low", "medium", "high", "xhigh")
 TIMEOUT_SECONDS = 600
 # Overload spikes last minutes, so the waits are longer than Google's SDK
