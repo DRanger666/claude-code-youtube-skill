@@ -52,7 +52,9 @@ model and settings, each attempt (key name, HTTP status, time, error), Gemini's
 finish reason, `usageMetadata` exactly as returned, Gemini's thought summary,
 and the path of the saved answer. The thought summary is Google's summary of
 the model's reasoning, not the reasoning itself, which the API does not return;
-the thinking tokens are billed in full all the same. For example, the token counts of the last ten requests:
+the thinking tokens are billed in full all the same. The record also keeps the
+caller (`claude-code` or the connector) and the caller's note on why it chose
+its settings. For example, the token counts of the last ten requests:
 
 ```sh
 tail -n 10 ~/.claude/mcp-servers/youtube/state/gemini-requests.jsonl \

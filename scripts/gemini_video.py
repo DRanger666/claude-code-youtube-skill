@@ -31,8 +31,11 @@ import urllib.request
 from pathlib import Path
 
 
+# Defaults for the settings a caller can choose. Without --thinking-level the
+# model uses its own default; without --max-output-tokens, its own maximum.
 MODEL = "gemini-3.6-flash"
-MAX_OUTPUT_TOKENS = 8192
+THINKING_LEVEL = None
+THINKING_LEVELS = ("minimal", "low", "medium", "high", "xhigh")
 TIMEOUT_SECONDS = 600
 # Overload spikes last minutes, so the waits are longer than Google's SDK
 # default (about 1 second, doubling to 60): 5, 10, 20, 40 seconds, plus jitter.
@@ -142,10 +145,14 @@ def load_keys():
     return keys
 
 
-def build_request(url, start, end, prompt):
+def build_request(url, start, end, prompt, thinking_level=None, max_output_tokens=None):
     # Thought summaries come back as parts marked "thought"; they are kept in
     # the request record, to see how Gemini went about a clip.
-    config = {"maxOutputTokens": MAX_OUTPUT_TOKENS, "thinkingConfig": {"includeThoughts": True}}
+    config = {"thinkingConfig": {"includeThoughts": True}}
+    if thinking_level:
+        config["thinkingConfig"]["thinkingLevel"] = thinking_level.upper()
+    if max_output_tokens:
+        config["maxOutputTokens"] = max_output_tokens
     if prompt is None:
         prompt = TRANSCRIPT_PROMPT
         config["responseMimeType"] = "application/json"
@@ -252,9 +259,17 @@ def parse_arguments():
     mode.add_argument("--transcript", action="store_true")
     mode.add_argument("--prompt")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--model", default=MODEL)
+    parser.add_argument("--thinking-level", choices=THINKING_LEVELS, default=THINKING_LEVEL,
+                        help="which levels a model accepts differs; Gemini rejects others")
+    parser.add_argument("--max-output-tokens", type=int, help="thinking and answer together")
+    parser.add_argument("--note", help="why these settings, kept in the request record")
+    parser.add_argument("--caller", default="claude-code", help="who asked, kept in the request record")
     args = parser.parse_args()
     if not 0 <= args.start < args.end:
         parser.error("Require 0 <= start < end")
+    if args.max_output_tokens is not None and args.max_output_tokens < 1:
+        parser.error("--max-output-tokens must be positive")
     return args
 
 
@@ -267,8 +282,11 @@ def new_record(args):
         "end": args.end,
         "mode": "prompt" if args.prompt else "transcript",
         "prompt": args.prompt,
-        "model": MODEL,
-        "max_output_tokens": MAX_OUTPUT_TOKENS,
+        "model": args.model,
+        "thinking_level": args.thinking_level,
+        "max_output_tokens": args.max_output_tokens,
+        "caller": args.caller,
+        "note": args.note,
         "attempts": [],
     }
 
@@ -276,7 +294,7 @@ def new_record(args):
 def ask(args, record):
     """Send the request, save the answer, and fill in the record; raise
     GeminiError if there is no complete answer."""
-    body = build_request(args.video_url, args.start, args.end, args.prompt)
+    body = build_request(args.video_url, args.start, args.end, args.prompt, args.thinking_level, args.max_output_tokens)
     send = functools.partial(post, model=record["model"])
     response = call_gemini(load_keys(), body, state_dir() / "gemini-cooldowns.json", record["attempts"], send=send)
     candidate = (response.get("candidates") or [{}])[0]
@@ -297,7 +315,9 @@ def ask(args, record):
         record["output"] = str(output.resolve())
         print(output)
     if not complete:
-        raise GeminiError(f"Incomplete answer (finishReason {record['finish_reason']}); use a smaller clip")
+        advice = "; use a smaller clip, a lower thinking level or a higher output limit"
+        raise GeminiError(f"Incomplete answer (finishReason {record['finish_reason']})"
+                          + (advice if record["finish_reason"] == "MAX_TOKENS" else ""))
 
 
 def save_record(record, path):
@@ -320,7 +340,11 @@ def attempt_line(number, attempt):
 def summary_line(record):
     """One line for people: how the request ended, its settings and its token
     counts. Gemini leaves out counts that are zero."""
-    line = f"request {record['id']} {record['outcome']} in {record['seconds']:.1f}s; model {record['model']}"
+    line = (
+        f"request {record['id']} {record['outcome']} in {record['seconds']:.1f}s; {record['model']}, "
+        f"thinking {record['thinking_level'] or 'model default'}, "
+        f"output limit {record['max_output_tokens'] or 'model maximum'}"
+    )
     if "finish_reason" in record:
         usage = record["usage"]
         by_kind = ", ".join(

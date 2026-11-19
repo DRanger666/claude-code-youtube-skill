@@ -86,6 +86,25 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/gemini_video.py" \
 For reusable material, add `--output` with the same naming, and save only what is
 worth reusing.
 
+The defaults suit a first request: the model in the script, the model's own
+thinking level, and no output limit below the model's maximum. Settings exist
+so that you and the user can learn what each kind of request needs, so change
+them for a reason, tell the user what you changed and why, and put the reason
+in `--note`, which the record keeps:
+
+- `--thinking-level` (`low`, `medium`, `high`, `xhigh`; `minimal` on some
+  older models): how much Gemini reasons before answering. Thinking is billed
+  as output and counts against the output limit. If an answer stops with
+  `MAX_TOKENS`, look at its record: when thinking took much of the output, a
+  lower level may fit; when the answer itself was long, use a smaller clip. If
+  an answer misreads who is speaking or what is on screen, its thought summary
+  may show why, and a higher level may help.
+- `--max-output-tokens`: leave it unset unless the user wants to cap what one
+  request can cost. Google advises lowering the thinking level rather than
+  setting a small limit, which cuts the answer off but still bills the
+  thinking.
+- `--model`: change it only with the user.
+
 The script tries the primary key, moves to the fallback when a key is rate
 limited or rejected, and rests a rate-limited key until Gemini says it can be
 used again. If every key is resting it reports the wait; do not retry sooner.
@@ -103,8 +122,8 @@ when choosing settings for the next one.
 
 Long videos go in clips, one at a time: 600 seconds with a 4-second overlap for
 transcripts, 1800 seconds otherwise. Start with one clip and continue only if it
-works. If a clip fails or returns an incomplete answer, use a smaller clip, not
-the same request again. Timestamps count from the start of the video.
+works. If a clip fails or returns an incomplete answer, change the request (a
+smaller clip, or other settings) rather than sending the same one again. Timestamps count from the start of the video.
 
 Each call costs quota, so check the saved folder first and do not repeat a call
 that succeeded.

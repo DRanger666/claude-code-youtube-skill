@@ -204,21 +204,22 @@ class MainTests(unittest.TestCase):
         self.assertIsInstance(record.pop("seconds"), float)
         self.assertEqual(record, {
             "video": "https://youtu.be/x", "start": 0, "end": 60, "mode": "transcript", "prompt": None,
-            "model": gemini_video.MODEL, "max_output_tokens": gemini_video.MAX_OUTPUT_TOKENS,
+            "model": gemini_video.MODEL, "thinking_level": gemini_video.THINKING_LEVEL,
+            "max_output_tokens": None, "caller": "claude-code", "note": None,
             "attempts": [{"key": "GEMINI_API_KEY", "status": 200, "seconds": 1.0}],
             "finish_reason": "STOP", "usage": ANSWER["usageMetadata"],
             "model_version": "gemini-test", "response_id": "abc",
             "thoughts": "Listening for speakers. Checking the timestamps.",
             "output": str(output), "outcome": "ok",
         })
-        self.assertRegex(self.logged[-1], r"^request \S+ ok in \d+\.\ds; model \S+; finish STOP; tokens: "
+        self.assertRegex(self.logged[-1], r"^request \S+ ok in \d+\.\ds; [^;]+; finish STOP; tokens: "
                          r"input 9000 \(video 7000, audio 2000\), thinking 2500, answer 5692, total 17192$")
 
     def test_incomplete_answer_is_saved_only_as_partial(self):
         response = json.loads(json.dumps(ANSWER))
         response["candidates"][0]["finishReason"] = "MAX_TOKENS"
         output = self.directory / "transcript-0-60.json"
-        with self.assertRaisesRegex(SystemExit, "MAX_TOKENS"):
+        with self.assertRaisesRegex(SystemExit, r"MAX_TOKENS\); use a smaller clip, a lower thinking level or a higher output limit$"):
             self.run_main(self.answering(response), output)
         self.assertFalse(output.exists())
         self.assertTrue(Path(f"{output}.partial").exists())
@@ -233,7 +234,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.record["outcome"], "failed")
         self.assertEqual(self.record["error"], "Gemini overloaded")
         self.assertEqual(len(self.record["attempts"]), 1)
-        self.assertRegex(self.logged[-1], r"^request \S+ failed in \d+\.\ds; model \S+$")
+        self.assertRegex(self.logged[-1], r"^request \S+ failed in \d+\.\ds; [^;]+$")
 
     def test_a_request_stopped_by_the_caller_is_still_recorded(self):
         waiting = (
@@ -255,6 +256,25 @@ class MainTests(unittest.TestCase):
         record = json.loads(self.records.read_text(encoding="utf-8"))
         self.assertEqual((record["outcome"], record["error"]), ("failed", "Stopped by the caller before Gemini answered"))
 
+    def test_the_chosen_settings_are_sent_and_recorded(self):
+        sent = {}
+
+        def call_gemini(keys, body, cooldown_file, attempts, send, **_):
+            sent["config"] = body["generationConfig"]
+            sent["model"] = send.keywords["model"]
+            return ANSWER
+        self.run_main(call_gemini, extra=["--model", "gemini-test-model", "--thinking-level", "low",
+                                          "--max-output-tokens", "30000", "--note", "dense speech", "--caller", "test"])
+        self.assertEqual(sent["model"], "gemini-test-model")
+        self.assertEqual(sent["config"]["thinkingConfig"], {"includeThoughts": True, "thinkingLevel": "LOW"})
+        self.assertEqual(sent["config"]["maxOutputTokens"], 30000)
+        self.assertEqual(
+            {name: self.record[name] for name in ["model", "thinking_level", "max_output_tokens", "note", "caller"]},
+            {"model": "gemini-test-model", "thinking_level": "low", "max_output_tokens": 30000,
+             "note": "dense speech", "caller": "test"},
+        )
+        self.assertIn("; gemini-test-model, thinking low, output limit 30000;", self.logged[-1])
+
     def test_requests_add_lines_to_one_file(self):
         self.run_main(self.answering(ANSWER))
         self.run_main(self.answering(ANSWER))
@@ -270,9 +290,9 @@ class BuildRequestTests(unittest.TestCase):
         self.assertIn("TRANSCRIPT-ONLY", prompt["text"])
         self.assertEqual(request["generationConfig"]["responseMimeType"], "application/json")
 
-    def test_thought_summaries_are_requested(self):
+    def test_unset_settings_are_left_to_the_model(self):
         request = gemini_video.build_request("https://youtu.be/x", 0, 60, "What is on the board?")
-        self.assertEqual(request["generationConfig"]["thinkingConfig"], {"includeThoughts": True})
+        self.assertEqual(request["generationConfig"], {"thinkingConfig": {"includeThoughts": True}})
 
     def test_prompt_mode_sends_the_prompt_as_plain_text(self):
         request = gemini_video.build_request("https://youtu.be/x", 0, 60, "What is on the board?")
