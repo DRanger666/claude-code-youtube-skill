@@ -9,7 +9,8 @@ it to --output.
 
 Every request is recorded, as one JSON line in
 ~/.claude/mcp-servers/youtube/state/gemini-requests.jsonl: the clip, the
-settings, each attempt (the key's name, never its value), Gemini's finish
+settings, the keys (name, label and fingerprint, never the value), each
+attempt, Gemini's finish
 reason and token counts as returned, its thought summary, and where the
 answer went. stderr gets a
 line per attempt as it happens and a summary at the end; both are made from
@@ -18,6 +19,7 @@ the record, and the summary carries its id.
 
 import argparse
 import functools
+import hashlib
 import json
 import os
 import random
@@ -29,6 +31,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import NamedTuple
 
 
 # Defaults for the settings a caller can choose. Without --max-output-tokens
@@ -118,6 +121,12 @@ TRANSCRIPT_RESPONSE_SCHEMA = {
 }
 
 
+class Key(NamedTuple):
+    name: str
+    value: str
+    label: str | None
+
+
 class GeminiError(Exception):
     """A request that ended without a complete answer; the message says why."""
 
@@ -131,19 +140,26 @@ def state_dir():
 
 
 def load_keys():
-    """Return (name, key) pairs in order, from the environment or the secrets file."""
-    values = {name: os.environ[name] for name in KEY_NAMES if name in os.environ}
-    if not values:
+    """Return the keys in order, from the environment or the secrets file.
+    A key's optional label, NAME_LABEL, says where it came from, for records."""
+    names = [name for key in KEY_NAMES for name in (key, f"{key}_LABEL")]
+    values = {name: os.environ[name] for name in names if name in os.environ}
+    if not any(name in values for name in KEY_NAMES):
         path = config_dir() / "secrets/work-with-youtube.env"
         if not path.exists():
             raise GeminiError(f"Missing Gemini credentials file: {path}")
         for line in path.read_text(encoding="utf-8").splitlines():
             name, _, value = line.partition("=")
             values[name.strip()] = value.strip()
-    keys = [(name, values[name]) for name in KEY_NAMES if values.get(name)]
+    keys = [Key(name, values[name], values.get(f"{name}_LABEL") or None) for name in KEY_NAMES if values.get(name)]
     if not keys:
         raise GeminiError("Missing required Gemini credential: GEMINI_API_KEY")
     return keys
+
+
+def fingerprint(value):
+    """A short hash that tells keys apart in records without revealing them."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
 
 
 def build_request(url, start, end, prompt, thinking_level=None, max_output_tokens=None):
@@ -205,7 +221,7 @@ def call_gemini(keys, body, cooldown_file, attempts, send=post, sleep=time.sleep
     are resting. Appends each attempt to attempts, and logs it."""
     cooldowns = json.loads(cooldown_file.read_text()) if cooldown_file.exists() else {}
     status, message = None, ""
-    for name, key in keys:
+    for name, key, _ in keys:
         if cooldowns.get(name, 0) > now():
             log(f"{name} skipped: resting for {cooldowns[name] - now():.0f} more seconds")
             continue
@@ -297,7 +313,9 @@ def ask(args, record):
     GeminiError if there is no complete answer."""
     body = build_request(args.video_url, args.start, args.end, args.prompt, args.thinking_level, args.max_output_tokens)
     send = functools.partial(post, model=record["model"])
-    response = call_gemini(load_keys(), body, state_dir() / "gemini-cooldowns.json", record["attempts"], send=send)
+    keys = load_keys()
+    record["keys"] = {key.name: {"label": key.label, "fingerprint": fingerprint(key.value)} for key in keys}
+    response = call_gemini(keys, body, state_dir() / "gemini-cooldowns.json", record["attempts"], send=send)
     candidate = (response.get("candidates") or [{}])[0]
     record["finish_reason"] = candidate.get("finishReason", "UNKNOWN")
     record["usage"] = response.get("usageMetadata", {})

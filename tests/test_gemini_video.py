@@ -16,7 +16,7 @@ import gemini_video
 OK = (200, {"candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}]})
 
 
-KEYS = [("GEMINI_API_KEY", "first"), ("GEMINI_API_KEY_FALLBACK", "second")]
+KEYS = [gemini_video.Key("GEMINI_API_KEY", "first", "paid"), gemini_video.Key("GEMINI_API_KEY_FALLBACK", "second", None)]
 RATE_LIMITED = (429, {"error": {"message": "quota"}})
 
 
@@ -127,18 +127,27 @@ class LoadKeysTests(unittest.TestCase):
         with mock.patch.dict(os.environ, environment, clear=True):
             return gemini_video.load_keys()
 
-    def test_reads_both_keys_from_the_secrets_file_in_order(self):
+    def load_file(self, text):
         with tempfile.TemporaryDirectory() as directory:
             secrets = Path(directory) / "secrets"
             secrets.mkdir()
-            (secrets / "work-with-youtube.env").write_text(
-                "GEMINI_API_KEY_FALLBACK=second\nGEMINI_API_KEY=first\n", encoding="utf-8"
-            )
-            keys = self.load({"CLAUDE_CONFIG_DIR": directory})
-        self.assertEqual([key for _, key in keys], ["first", "second"])
+            (secrets / "work-with-youtube.env").write_text(text, encoding="utf-8")
+            return self.load({"CLAUDE_CONFIG_DIR": directory})
+
+    def test_reads_both_keys_from_the_secrets_file_in_order(self):
+        keys = self.load_file("GEMINI_API_KEY_FALLBACK=second\nGEMINI_API_KEY=first\n")
+        self.assertEqual([key.value for key in keys], ["first", "second"])
+
+    def test_one_key_is_enough(self):
+        self.assertEqual(self.load_file("GEMINI_API_KEY=only\n"), [("GEMINI_API_KEY", "only", None)])
+
+    def test_labels_say_where_keys_came_from(self):
+        keys = self.load_file("GEMINI_API_KEY=first\nGEMINI_API_KEY_LABEL=paid, project yt\nGEMINI_API_KEY_FALLBACK=second\n")
+        self.assertEqual([key.label for key in keys], ["paid, project yt", None])
 
     def test_environment_overrides_the_file(self):
-        self.assertEqual(self.load({"GEMINI_API_KEY": "from-env"}), [("GEMINI_API_KEY", "from-env")])
+        keys = self.load({"GEMINI_API_KEY": "from-env", "GEMINI_API_KEY_LABEL": "test"})
+        self.assertEqual(keys, [("GEMINI_API_KEY", "from-env", "test")])
 
     def test_missing_file_is_reported(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -206,6 +215,10 @@ class MainTests(unittest.TestCase):
             "video": "https://youtu.be/x", "start": 0, "end": 60, "mode": "transcript", "prompt": None,
             "model": gemini_video.MODEL, "thinking_level": gemini_video.THINKING_LEVEL,
             "max_output_tokens": None, "caller": "claude-code", "note": None,
+            "keys": {
+                "GEMINI_API_KEY": {"label": "paid", "fingerprint": gemini_video.fingerprint("first")},
+                "GEMINI_API_KEY_FALLBACK": {"label": None, "fingerprint": gemini_video.fingerprint("second")},
+            },
             "attempts": [{"key": "GEMINI_API_KEY", "status": 200, "seconds": 1.0}],
             "finish_reason": "STOP", "usage": ANSWER["usageMetadata"],
             "model_version": "gemini-test", "response_id": "abc",
@@ -241,7 +254,7 @@ class MainTests(unittest.TestCase):
             "import sys, time\n"
             f"sys.path.insert(0, {str(Path(gemini_video.__file__).parent)!r})\n"
             "import gemini_video\n"
-            "gemini_video.load_keys = lambda: [('GEMINI_API_KEY', 'k')]\n"
+            "gemini_video.load_keys = lambda: [gemini_video.Key('GEMINI_API_KEY', 'k', None)]\n"
             "gemini_video.post = lambda key, body, model: (print('sent', flush=True), time.sleep(30))\n"
             "sys.argv = ['gemini_video.py', '--video-url', 'https://youtu.be/x', '--start', '0', '--end', '60', '--transcript']\n"
             "gemini_video.main()\n"
@@ -266,6 +279,7 @@ class MainTests(unittest.TestCase):
         self.run_main(call_gemini, extra=["--model", "gemini-test-model", "--thinking-level", "low",
                                           "--max-output-tokens", "30000", "--note", "dense speech", "--caller", "test"])
         self.assertEqual(sent["model"], "gemini-test-model")
+        self.assertNotIn("first", json.dumps(self.record))
         self.assertEqual(sent["config"]["thinkingConfig"], {"includeThoughts": True, "thinkingLevel": "LOW"})
         self.assertEqual(sent["config"]["maxOutputTokens"], 30000)
         self.assertEqual(

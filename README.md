@@ -35,26 +35,44 @@ Gemini keys go in `~/.claude/secrets/work-with-youtube.env`, mode `0600`:
 
 ```text
 GEMINI_API_KEY=...
+GEMINI_API_KEY_LABEL=paid, project youtube-gemini
 GEMINI_API_KEY_FALLBACK=...
+GEMINI_API_KEY_FALLBACK_LABEL=free, old project
 ```
 
-The fallback is optional. Gemini quota is per Google Cloud project, so it adds
-capacity only if it comes from a different project than the primary. It does
-not help when Gemini is overloaded, since both keys reach the same model.
+Only `GEMINI_API_KEY` is required. With one key, leave out both fallback
+lines; to switch to another key, replace the value and its label. The next
+request uses whatever the file holds.
+
+A fallback adds capacity only if it comes from a different Google Cloud
+project, since Gemini's quota is per project. It does not help when Gemini is
+overloaded, since both keys reach the same model.
+
+Labels are optional and not secret: they say where a key came from, such as its
+account, project and tier. Each request's record names the keys it had, with
+their labels and a fingerprint, the first 8 hex digits of the key's SHA-256,
+which tells keys apart without revealing them. To find which record used a key
+you hold, compute its fingerprint the same way without printing the key, for
+example `read -rs key; printf %s "$key" | sha256sum | cut -c1-8`.
 
 ## Request records
 
 Every Gemini request is recorded as one JSON line in
 `~/.claude/mcp-servers/youtube/state/gemini-requests.jsonl` (mode `0600`), by
 Claude Code and by the [web connector](https://github.com/DRanger666/claude-web-youtube-connector)
-alike, since both run the same script. A record holds the clip, the prompt, the
-model and settings, each attempt (key name, HTTP status, time, error), Gemini's
-finish reason, `usageMetadata` exactly as returned, Gemini's thought summary,
-and the path of the saved answer. The thought summary is Google's summary of
-the model's reasoning, not the reasoning itself, which the API does not return;
-the thinking tokens are billed in full all the same. The record also keeps the
-caller (`claude-code` or the connector) and the caller's note on why it chose
-its settings. For example, the token counts of the last ten requests:
+alike, since both run the same script. A record holds:
+
+- the clip, the prompt, the model and settings, who asked (`claude-code` or the
+  connector), and the caller's note on why it chose those settings
+- the keys (name, label, fingerprint) and each attempt (key name, HTTP status,
+  time, error)
+- Gemini's finish reason, its `usageMetadata` exactly as returned, and its
+  thought summary
+- the path of the saved answer, or the error
+
+The thought summary is Google's summary of the model's reasoning, not the
+reasoning itself, which the API does not return; the thinking tokens are billed
+in full all the same. For example, the token counts of the last ten requests:
 
 ```sh
 tail -n 10 ~/.claude/mcp-servers/youtube/state/gemini-requests.jsonl \
