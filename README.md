@@ -39,7 +39,8 @@ GEMINI_API_KEY_FALLBACK=...
 ```
 
 The fallback is optional. Gemini quota is per Google Cloud project, so it adds
-capacity only if it comes from a different project than the primary.
+capacity only if it comes from a different project than the primary. It does
+not help when Gemini is overloaded, since both keys reach the same model.
 
 ## Development
 

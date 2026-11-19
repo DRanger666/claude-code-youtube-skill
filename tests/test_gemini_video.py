@@ -29,6 +29,7 @@ class CallGeminiTests(unittest.TestCase):
         """Play back replies and return the keys that were used."""
         remaining = list(replies)
         keys_used = []
+        self.waits = []
 
         def send(key, body):
             keys_used.append(key)
@@ -36,7 +37,7 @@ class CallGeminiTests(unittest.TestCase):
 
         self.keys_used = keys_used
         gemini_video.call_gemini(
-            keys, {}, self.cooldown_file, send=send, sleep=lambda _: None, now=lambda: self.time
+            keys, {}, self.cooldown_file, send=send, sleep=self.waits.append, now=lambda: self.time
         )
         return keys_used
 
@@ -53,8 +54,17 @@ class CallGeminiTests(unittest.TestCase):
     def test_transient_failure_is_retried_on_the_same_key(self):
         self.assertEqual(self.call([(503, {}), (0, {}), OK]), ["first"] * 3)
 
-    def test_exhausted_retries_move_to_the_second_key(self):
-        self.assertEqual(self.call([(503, {})] * 3 + [OK]), ["first"] * 3 + ["second"])
+    def test_overload_waits_longer_each_time_with_jitter(self):
+        self.assertEqual(self.call([(503, {})] * 4 + [OK]), ["first"] * 5)
+        for wait, base in zip(self.waits, [5, 10, 20, 40]):
+            self.assertTrue(base <= wait <= base + 1, self.waits)
+
+    def test_exhausted_retries_stop_without_trying_the_second_key(self):
+        overloaded = (503, {"error": {"message": "high demand"}})
+        with self.assertRaisesRegex(SystemExit, r"overloaded or unreachable \(503\): high demand; try again later"):
+            self.call([overloaded] * 5)
+        self.assertEqual(self.keys_used, ["first"] * 5)
+        self.assertFalse(self.cooldown_file.exists())
 
     def test_bad_request_stops_without_trying_the_second_key(self):
         with self.assertRaisesRegex(SystemExit, "bad clip"):

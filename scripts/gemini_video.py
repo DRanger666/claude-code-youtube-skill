@@ -3,12 +3,15 @@
 
 Tries GEMINI_API_KEY, then GEMINI_API_KEY_FALLBACK if the first key is rate
 limited or rejected. A rate-limited key rests until Gemini says it can be used
-again. Prints the answer, or writes it to --output.
+again. When Gemini is overloaded or unreachable, it waits and retries with the
+same key, since every key reaches the same model. Prints the answer, or writes
+it to --output.
 """
 
 import argparse
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -23,7 +26,11 @@ ENDPOINT = (
 )
 MAX_OUTPUT_TOKENS = 8192
 TIMEOUT_SECONDS = 600
-RETRIES = 2
+# Overload spikes last minutes, so the waits are longer than Google's SDK
+# default (about 1 second, doubling to 60): 5, 10, 20, 40 seconds, plus jitter.
+RETRIES = 4
+FIRST_RETRY_SECONDS = 5
+MAX_RETRY_SECONDS = 60
 COOLDOWN_SECONDS = 60
 TRANSIENT_STATUSES = {0, 408, 500, 502, 503, 504}
 KEY_STATUSES = {401, 403, 429}
@@ -176,14 +183,16 @@ def call_gemini(keys, body, cooldown_file, send=post, sleep=time.sleep, now=time
                 return payload
             message = payload.get("error", {}).get("message", "")
             if status in TRANSIENT_STATUSES and attempt < RETRIES:
-                sleep(2**attempt)
+                sleep(min(FIRST_RETRY_SECONDS * 2**attempt, MAX_RETRY_SECONDS) + random.uniform(0, 1))
                 continue
+            if status in TRANSIENT_STATUSES:
+                sys.exit(f"Gemini is overloaded or unreachable ({status}): {message}; try again later")
             if status == 429:
                 cooldowns[name] = now() + retry_delay(payload)
                 cooldown_file.parent.mkdir(parents=True, exist_ok=True)
                 cooldown_file.write_text(json.dumps(cooldowns))
             bad_key = status == 400 and "api key" in message.lower()
-            if status in TRANSIENT_STATUSES or status in KEY_STATUSES or bad_key:
+            if status in KEY_STATUSES or bad_key:
                 break
             sys.exit(f"Gemini request failed ({status}): {message}")
     if status is None or status == 429:
