@@ -5,7 +5,9 @@ Tries GEMINI_API_KEY, then GEMINI_API_KEY_FALLBACK if the first key is rate
 limited or rejected. A rate-limited key rests until Gemini says it can be used
 again. When Gemini is overloaded or unreachable, it waits and retries with the
 same key, since every key reaches the same model. Prints the answer, or writes
-it to --output.
+it to --output. Writes one line per attempt to stderr: the key's name (never
+its value), the HTTP status, the time taken and, for an answer, Gemini's token
+counts, including tokens spent thinking.
 """
 
 import argparse
@@ -170,18 +172,45 @@ def retry_delay(payload):
     return COOLDOWN_SECONDS
 
 
-def call_gemini(keys, body, cooldown_file, send=post, sleep=time.sleep, now=time.time):
+def log_to_stderr(line):
+    print(line, file=sys.stderr, flush=True)
+
+
+def usage_summary(response):
+    """Describe an answer's finish reason and token counts, from usageMetadata.
+    Gemini leaves out counts that are zero."""
+    usage = response.get("usageMetadata", {})
+    finish = (response.get("candidates") or [{}])[0].get("finishReason", "UNKNOWN")
+    by_kind = ", ".join(
+        f"{detail.get('modality', '?').lower()} {detail.get('tokenCount', 0)}"
+        for detail in usage.get("promptTokensDetails", [])
+    )
+    return (
+        f"finish {finish}; tokens: input {usage.get('promptTokenCount', 0)}"
+        + (f" ({by_kind})" if by_kind else "")
+        + f", thinking {usage.get('thoughtsTokenCount', 0)}"
+        + f", answer {usage.get('candidatesTokenCount', 0)}"
+        + f", total {usage.get('totalTokenCount', 0)}"
+    )
+
+
+def call_gemini(keys, body, cooldown_file, send=post, sleep=time.sleep, now=time.time, log=log_to_stderr):
     """Return the first successful response, moving on from keys that fail or are resting."""
     cooldowns = json.loads(cooldown_file.read_text()) if cooldown_file.exists() else {}
     status, message = None, ""
     for name, key in keys:
         if cooldowns.get(name, 0) > now():
+            log(f"{name} skipped: resting for {cooldowns[name] - now():.0f} more seconds")
             continue
         for attempt in range(RETRIES + 1):
+            started = now()
             status, payload = send(key, body)
+            took = f"attempt {attempt + 1} with {name}: {status} in {now() - started:.1f}s"
             if status == 200:
+                log(f"{took}, {usage_summary(payload)}")
                 return payload
             message = payload.get("error", {}).get("message", "")
+            log(f"{took}: {message[:200]}")
             if status in TRANSIENT_STATUSES and attempt < RETRIES:
                 sleep(min(FIRST_RETRY_SECONDS * 2**attempt, MAX_RETRY_SECONDS) + random.uniform(0, 1))
                 continue

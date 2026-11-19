@@ -30,6 +30,7 @@ class CallGeminiTests(unittest.TestCase):
         remaining = list(replies)
         keys_used = []
         self.waits = []
+        self.logged = []
 
         def send(key, body):
             keys_used.append(key)
@@ -37,9 +38,32 @@ class CallGeminiTests(unittest.TestCase):
 
         self.keys_used = keys_used
         gemini_video.call_gemini(
-            keys, {}, self.cooldown_file, send=send, sleep=self.waits.append, now=lambda: self.time
+            keys, {}, self.cooldown_file, send=send, sleep=self.waits.append, now=lambda: self.time,
+            log=self.logged.append,
         )
         return keys_used
+
+    def test_each_attempt_is_logged_with_the_answers_token_counts(self):
+        answer = (200, {
+            "candidates": [{"finishReason": "MAX_TOKENS"}],
+            "usageMetadata": {
+                "promptTokenCount": 9000, "thoughtsTokenCount": 2500, "candidatesTokenCount": 5692,
+                "totalTokenCount": 17192,
+                "promptTokensDetails": [{"modality": "VIDEO", "tokenCount": 7000}, {"modality": "AUDIO", "tokenCount": 2000}],
+            },
+        })
+        self.call([RATE_LIMITED, (503, {"error": {"message": "high demand"}}), answer])
+        self.assertEqual(self.logged, [
+            "attempt 1 with GEMINI_API_KEY: 429 in 0.0s: quota",
+            "attempt 1 with GEMINI_API_KEY_FALLBACK: 503 in 0.0s: high demand",
+            "attempt 2 with GEMINI_API_KEY_FALLBACK: 200 in 0.0s, finish MAX_TOKENS; tokens: "
+            "input 9000 (video 7000, audio 2000), thinking 2500, answer 5692, total 17192",
+        ])
+        self.call([OK])
+        self.assertRegex(self.logged[0], r"^GEMINI_API_KEY skipped: resting for \d+ more seconds$")
+        self.assertIn("thinking 0, answer 0", self.logged[1])
+        for line in self.logged:  # the key values are "first" and "second"
+            self.assertNotRegex(line, r"\b(first|second)\b")
 
     def test_first_key_success_never_touches_the_second(self):
         self.assertEqual(self.call([OK]), ["first"])
