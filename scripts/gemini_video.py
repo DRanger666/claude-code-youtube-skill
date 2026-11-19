@@ -10,7 +10,8 @@ it to --output.
 Every request is recorded, as one JSON line in
 ~/.claude/mcp-servers/youtube/state/gemini-requests.jsonl: the clip, the
 settings, each attempt (the key's name, never its value), Gemini's finish
-reason and token counts as returned, and where the answer went. stderr gets a
+reason and token counts as returned, its thought summary, and where the
+answer went. stderr gets a
 line per attempt as it happens and a summary at the end; both are made from
 the record, and the summary carries its id.
 """
@@ -142,7 +143,9 @@ def load_keys():
 
 
 def build_request(url, start, end, prompt):
-    config = {"maxOutputTokens": MAX_OUTPUT_TOKENS}
+    # Thought summaries come back as parts marked "thought"; they are kept in
+    # the request record, to see how Gemini went about a clip.
+    config = {"maxOutputTokens": MAX_OUTPUT_TOKENS, "thinkingConfig": {"includeThoughts": True}}
     if prompt is None:
         prompt = TRANSCRIPT_PROMPT
         config["responseMimeType"] = "application/json"
@@ -230,12 +233,14 @@ def call_gemini(keys, body, cooldown_file, attempts, send=post, sleep=time.sleep
     raise GeminiError(f"Every Gemini key failed; last error ({status}): {message}")
 
 
-def answer_text(response):
-    """Return (text, finishReason) from a Gemini response."""
+def answer_and_thoughts(response):
+    """Return (answer, thought summary) from a Gemini response. Thought parts
+    are marked "thought": true, and never belong in the answer."""
     candidate = (response.get("candidates") or [{}])[0]
     parts = candidate.get("content", {}).get("parts", [])
-    text = "".join(part.get("text", "") for part in parts)
-    return text, candidate.get("finishReason", "UNKNOWN")
+    answer = "".join(part.get("text", "") for part in parts if not part.get("thought"))
+    thoughts = "".join(part.get("text", "") for part in parts if part.get("thought"))
+    return answer, thoughts
 
 
 def parse_arguments():
@@ -280,8 +285,8 @@ def ask(args, record):
     for field, name in [("modelVersion", "model_version"), ("responseId", "response_id"), ("promptFeedback", "prompt_feedback")]:
         if field in response:
             record[name] = response[field]
-    text, finish_reason = answer_text(response)
-    complete = finish_reason == "STOP"
+    text, record["thoughts"] = answer_and_thoughts(response)
+    complete = record["finish_reason"] == "STOP"
     if args.output is None:
         print(text)
     else:
@@ -292,7 +297,7 @@ def ask(args, record):
         record["output"] = str(output.resolve())
         print(output)
     if not complete:
-        raise GeminiError(f"Incomplete answer (finishReason {finish_reason}); use a smaller clip")
+        raise GeminiError(f"Incomplete answer (finishReason {record['finish_reason']}); use a smaller clip")
 
 
 def save_record(record, path):

@@ -97,7 +97,7 @@ try again a few minutes later; other errors repeat, so change the request.
 Every request, including one that fails, is recorded as one JSON line in
 `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/mcp-servers/youtube/state/gemini-requests.jsonl`:
 the clip, the settings, each attempt, Gemini's finish reason and token counts,
-and where the answer went. The script's last stderr line before any error
+its summary of its own thinking, and where the answer went. The script's last stderr line before any error
 summarizes it and gives its id. Read the records when a request goes wrong or
 when choosing settings for the next one.
 

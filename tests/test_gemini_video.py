@@ -147,7 +147,11 @@ class LoadKeysTests(unittest.TestCase):
 
 
 ANSWER = {
-    "candidates": [{"content": {"parts": [{"text": "hi"}]}, "finishReason": "STOP"}],
+    "candidates": [{"content": {"parts": [
+        {"text": "Listening for speakers. ", "thought": True},
+        {"text": "hi"},
+        {"text": "Checking the timestamps.", "thought": True},
+    ]}, "finishReason": "STOP"}],
     "usageMetadata": {
         "promptTokenCount": 9000, "thoughtsTokenCount": 2500, "candidatesTokenCount": 5692,
         "totalTokenCount": 17192,
@@ -204,6 +208,7 @@ class MainTests(unittest.TestCase):
             "attempts": [{"key": "GEMINI_API_KEY", "status": 200, "seconds": 1.0}],
             "finish_reason": "STOP", "usage": ANSWER["usageMetadata"],
             "model_version": "gemini-test", "response_id": "abc",
+            "thoughts": "Listening for speakers. Checking the timestamps.",
             "output": str(output), "outcome": "ok",
         })
         self.assertRegex(self.logged[-1], r"^request \S+ ok in \d+\.\ds; model \S+; finish STOP; tokens: "
@@ -264,6 +269,10 @@ class BuildRequestTests(unittest.TestCase):
         self.assertEqual(video["videoMetadata"], {"startOffset": "10s", "endOffset": "70s"})
         self.assertIn("TRANSCRIPT-ONLY", prompt["text"])
         self.assertEqual(request["generationConfig"]["responseMimeType"], "application/json")
+
+    def test_thought_summaries_are_requested(self):
+        request = gemini_video.build_request("https://youtu.be/x", 0, 60, "What is on the board?")
+        self.assertEqual(request["generationConfig"]["thinkingConfig"], {"includeThoughts": True})
 
     def test_prompt_mode_sends_the_prompt_as_plain_text(self):
         request = gemini_video.build_request("https://youtu.be/x", 0, 60, "What is on the board?")

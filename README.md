@@ -49,8 +49,10 @@ Every Gemini request is recorded as one JSON line in
 Claude Code and by the [web connector](https://github.com/DRanger666/claude-web-youtube-connector)
 alike, since both run the same script. A record holds the clip, the prompt, the
 model and settings, each attempt (key name, HTTP status, time, error), Gemini's
-finish reason, `usageMetadata` exactly as returned, and the path of the saved
-answer. For example, the token counts of the last ten requests:
+finish reason, `usageMetadata` exactly as returned, Gemini's thought summary,
+and the path of the saved answer. The thought summary is Google's summary of
+the model's reasoning, not the reasoning itself, which the API does not return;
+the thinking tokens are billed in full all the same. For example, the token counts of the last ten requests:
 
 ```sh
 tail -n 10 ~/.claude/mcp-servers/youtube/state/gemini-requests.jsonl \
