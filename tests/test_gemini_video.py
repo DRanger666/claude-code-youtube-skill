@@ -61,7 +61,7 @@ class CallGeminiTests(unittest.TestCase):
 
     def test_exhausted_retries_stop_without_trying_the_second_key(self):
         overloaded = (503, {"error": {"message": "high demand"}})
-        with self.assertRaisesRegex(SystemExit, r"overloaded or unreachable \(503\): high demand; try again later"):
+        with self.assertRaisesRegex(SystemExit, r"^Gemini overloaded or unreachable \(503\) after 5 attempts: high demand; try again in a few minutes$"):
             self.call([overloaded] * 5)
         self.assertEqual(self.keys_used, ["first"] * 5)
         self.assertFalse(self.cooldown_file.exists())

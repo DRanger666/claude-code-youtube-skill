@@ -186,7 +186,10 @@ def call_gemini(keys, body, cooldown_file, send=post, sleep=time.sleep, now=time
                 sleep(min(FIRST_RETRY_SECONDS * 2**attempt, MAX_RETRY_SECONDS) + random.uniform(0, 1))
                 continue
             if status in TRANSIENT_STATUSES:
-                sys.exit(f"Gemini is overloaded or unreachable ({status}): {message}; try again later")
+                sys.exit(
+                    f"Gemini overloaded or unreachable ({status}) after {RETRIES + 1} attempts: "
+                    f"{message}; try again in a few minutes"
+                )
             if status == 429:
                 cooldowns[name] = now() + retry_delay(payload)
                 cooldown_file.parent.mkdir(parents=True, exist_ok=True)

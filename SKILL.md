@@ -89,8 +89,10 @@ worth reusing.
 The script tries the primary key, moves to the fallback when a key is rate
 limited or rejected, and rests a rate-limited key until Gemini says it can be
 used again. If every key is resting it reports the wait; do not retry sooner.
-When Gemini is overloaded (503) or unreachable, it retries the same key for
-about 75 seconds; if it then reports Gemini overloaded, try again minutes later.
+When Gemini is overloaded (503) or unreachable, it retries the same key, waiting
+about 75 seconds in all between tries; since Gemini can take a minute to refuse
+each one, this can last several minutes. If it then reports "Gemini overloaded",
+try again a few minutes later; other errors repeat, so change the request.
 
 Long videos go in clips, one at a time: 600 seconds with a 4-second overlap for
 transcripts, 1800 seconds otherwise. Start with one clip and continue only if it
