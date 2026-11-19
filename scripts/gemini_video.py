@@ -10,11 +10,10 @@ it to --output.
 Every request is recorded, as one JSON line in
 ~/.claude/mcp-servers/youtube/state/gemini-requests.jsonl: the clip, the
 settings, the keys (name, label and fingerprint, never the value), each
-attempt, Gemini's finish
-reason and token counts as returned, its thought summary, and where the
-answer went. stderr gets a
-line per attempt as it happens and a summary at the end; both are made from
-the record, and the summary carries its id.
+attempt, Gemini's finish reason and token counts as returned, its thought
+summary, and where the answer went. stderr gets a line per attempt as it
+happens and a summary at the end; both are made from the record, and the
+summary carries its id.
 """
 
 import argparse
@@ -257,14 +256,19 @@ def call_gemini(keys, body, cooldown_file, attempts, send=post, sleep=time.sleep
     raise GeminiError(f"Every Gemini key failed; last error ({status}): {message}")
 
 
-def answer_and_thoughts(response):
-    """Return (answer, thought summary) from a Gemini response. Thought parts
-    are marked "thought": true, and never belong in the answer."""
+def record_response(record, response):
+    """Copy what Gemini said about its answer into the record, and return the
+    answer. Thought parts are marked "thought": true; they go to the record,
+    never into the answer."""
     candidate = (response.get("candidates") or [{}])[0]
+    record["finish_reason"] = candidate.get("finishReason", "UNKNOWN")
+    record["usage"] = response.get("usageMetadata", {})
+    for field, name in [("modelVersion", "model_version"), ("responseId", "response_id"), ("promptFeedback", "prompt_feedback")]:
+        if field in response:
+            record[name] = response[field]
     parts = candidate.get("content", {}).get("parts", [])
-    answer = "".join(part.get("text", "") for part in parts if not part.get("thought"))
-    thoughts = "".join(part.get("text", "") for part in parts if part.get("thought"))
-    return answer, thoughts
+    record["thoughts"] = "".join(part.get("text", "") for part in parts if part.get("thought"))
+    return "".join(part.get("text", "") for part in parts if not part.get("thought"))
 
 
 def parse_arguments():
@@ -316,13 +320,7 @@ def ask(args, record):
     keys = load_keys()
     record["keys"] = {key.name: {"label": key.label, "fingerprint": fingerprint(key.value)} for key in keys}
     response = call_gemini(keys, body, state_dir() / "gemini-cooldowns.json", record["attempts"], send=send)
-    candidate = (response.get("candidates") or [{}])[0]
-    record["finish_reason"] = candidate.get("finishReason", "UNKNOWN")
-    record["usage"] = response.get("usageMetadata", {})
-    for field, name in [("modelVersion", "model_version"), ("responseId", "response_id"), ("promptFeedback", "prompt_feedback")]:
-        if field in response:
-            record[name] = response[field]
-    text, record["thoughts"] = answer_and_thoughts(response)
+    text = record_response(record, response)
     complete = record["finish_reason"] == "STOP"
     if args.output is None:
         print(text)
