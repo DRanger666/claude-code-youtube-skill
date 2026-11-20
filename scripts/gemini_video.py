@@ -1,6 +1,14 @@
 #!/usr/bin/env python3
 """Ask Gemini about a clip of a YouTube video.
 
+A question (--prompt) sends Gemini the YouTube link with the clip's range, so
+it sees and hears the clip. A transcript (--transcript) needs only the sound:
+the video's audio is downloaded once with yt-dlp into
+~/.cache/work-with-youtube/audio/, the clip is cut from it with ffmpeg and sent
+as audio, and the answer's timestamps are moved from the clip's start to the
+video's. A download that fails is retried once after `uv tool upgrade yt-dlp`,
+since YouTube's changes break older versions.
+
 Tries GEMINI_API_KEY, then GEMINI_API_KEY_FALLBACK if the first key is rate
 limited or rejected. A rate-limited key rests until Gemini says it can be used
 again. When Gemini is overloaded or unreachable, it waits and retries with the
@@ -17,6 +25,7 @@ summary carries its id.
 """
 
 import argparse
+import base64
 import functools
 import hashlib
 import json
@@ -24,10 +33,14 @@ import os
 import random
 import re
 import secrets
+import shutil
 import signal
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import NamedTuple
@@ -49,18 +62,25 @@ COOLDOWN_SECONDS = 60
 TRANSIENT_STATUSES = {0, 408, 500, 502, 503, 504}
 KEY_STATUSES = {401, 403, 429}
 KEY_NAMES = ("GEMINI_API_KEY", "GEMINI_API_KEY_FALLBACK")
+# Mono MP3 at 32 kbps transcribed as well as the full video in a test on
+# 2026-11-20; audio costs the same 30 tokens a second at any bitrate.
+AUDIO_BITRATE = "32k"
+INSTALL = {
+    "yt-dlp": "uv tool install 'yt-dlp[default]'",
+    "ffmpeg": "sudo apt install ffmpeg",
+}
 
 TRANSCRIPT_PROMPT = (
     "TRANSCRIPT-ONLY MODE. Transcribe every audible human vocal passage containing "
-    "linguistic content in the supplied interval. Preserve the words and repetitions "
+    "linguistic content in the supplied audio. Preserve the words and repetitions "
     "as heard; do not summarize, paraphrase, translate, romanize, interpret, or "
     "correct them. Use the original language and its native script. Separate sung "
     "from spoken passages. Do not describe visuals, music, mood, story, themes, "
     "people, or actions. Do not add commentary. Every timestamp must be a string in "
-    "fixed MM:SS.mmm format measured from the beginning of the source video; for example, "
+    "fixed MM:SS.mmm format measured from the beginning of the supplied audio; for example, "
     "5 minutes 26.5 seconds must be written as 05:26.500, never as 526.5 or as "
     "elapsed seconds. The minute component must have at least two digits and may "
-    "exceed 99 for long videos. Cover the complete supplied interval. Mark unclear "
+    "exceed 99 for long audio. Cover the complete supplied audio. Mark unclear "
     "words as uncertain rather than inventing them; use [inaudible] only when no "
     "reliable wording can be recovered. Return only the specified JSON structure."
 )
@@ -161,7 +181,127 @@ def fingerprint(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:8]
 
 
-def build_request(url, start, end, prompt, thinking_level=None, max_output_tokens=None):
+def video_id(url):
+    """The 11-character ID from a YouTube link of any usual form, or a bare ID;
+    None if there is none. Anything else in the link, such as a time, is
+    dropped: Gemini given a link with a time in it lost the video and billed
+    its page as text."""
+    url = url.strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", url):
+        return url
+    parsed = urllib.parse.urlparse(url if "//" in url else f"https://{url}")
+    host = (parsed.hostname or "").removeprefix("www.").removeprefix("m.")
+    path = parsed.path.strip("/").split("/")
+    if host == "youtu.be":
+        candidate = path[0]
+    elif host in ("youtube.com", "music.youtube.com") and path[0] == "watch":
+        candidate = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+    elif host == "youtube.com" and path[0] in ("shorts", "live", "embed") and len(path) > 1:
+        candidate = path[1]
+    else:
+        return None
+    return candidate if re.fullmatch(r"[A-Za-z0-9_-]{11}", candidate) else None
+
+
+def watch_url(video):
+    return f"https://www.youtube.com/watch?v={video}"
+
+
+def cache_dir():
+    return Path(os.environ.get("XDG_CACHE_HOME") or "~/.cache").expanduser() / "work-with-youtube/audio"
+
+
+def run(command):
+    return subprocess.run(command, capture_output=True, timeout=TIMEOUT_SECONDS)
+
+
+def program(name):
+    path = shutil.which(name)
+    if path is None:
+        raise GeminiError(f"{name} is not installed; install it with: {INSTALL[name]}")
+    return path
+
+
+def last_line(process):
+    lines = process.stderr.decode("utf-8", "replace").strip().splitlines()
+    return lines[-1] if lines else f"exit status {process.returncode}"
+
+
+def download_audio(video, audio, run=run):
+    """Return the video's whole audio track, downloading it into the cache the
+    first time. A failed download is tried once more after upgrading yt-dlp."""
+    cached = sorted(cache_dir().glob(f"{video}.*"))
+    audio["downloaded"] = not cached
+    if cached:
+        return cached[0]
+    yt_dlp = program("yt-dlp")
+    version = lambda: run([yt_dlp, "--version"]).stdout.decode().strip()
+    audio["yt_dlp"] = version()
+    cache_dir().mkdir(parents=True, exist_ok=True)
+    for upgraded in (False, True):
+        # Into a folder of its own, then moved into place whole, so a download
+        # that stops halfway never looks like a cached one.
+        with tempfile.TemporaryDirectory(dir=cache_dir(), prefix=".download-") as folder:
+            process = run([yt_dlp, "--quiet", "--no-warnings", "--no-playlist", "--js-runtimes", "node",
+                           "-f", "bestaudio", "-o", f"{folder}/{video}.%(ext)s", watch_url(video)])
+            files = list(Path(folder).glob(f"{video}.*"))
+            if process.returncode == 0 and files:
+                return Path(shutil.move(files[0], cache_dir() / files[0].name))
+        error = last_line(process)
+        uv = shutil.which("uv")
+        if upgraded or uv is None:
+            break
+        run([uv, "tool", "upgrade", "yt-dlp"])
+        new_version = version()
+        if new_version == audio["yt_dlp"]:
+            break
+        audio["upgraded"] = {"from": audio["yt_dlp"], "to": new_version}
+        audio["yt_dlp"] = new_version
+    raise GeminiError(f"yt-dlp {audio['yt_dlp']} could not download the audio: {error}")
+
+
+def cut_audio(source, start, end, run=run):
+    """The clip from start to end of the audio file, as mono MP3 bytes."""
+    process = run([program("ffmpeg"), "-v", "error", "-ss", str(start), "-t", str(end - start), "-i", str(source),
+                   "-vn", "-ac", "1", "-b:a", AUDIO_BITRATE, "-f", "mp3", "pipe:1"])
+    if process.returncode != 0:
+        raise GeminiError(f"ffmpeg could not cut the clip: {last_line(process)}")
+    if not process.stdout:
+        raise GeminiError(f"The clip from {start}s is past the end of the video")
+    return process.stdout
+
+
+def shift_timestamps(text, seconds):
+    """Move a transcript's timestamps by seconds, from the clip's start to the
+    video's; None if the answer is not the expected JSON."""
+    def shift(stamp):
+        minutes, rest = stamp.split(":")
+        milliseconds = round((int(minutes) * 60 + float(rest) + seconds) * 1000)
+        return f"{milliseconds // 60000:02d}:{milliseconds % 60000 // 1000:02d}.{milliseconds % 1000:03d}"
+    try:
+        transcript = json.loads(text)
+        for field in ("clip_start_timestamp", "clip_end_timestamp", "completed_through_timestamp"):
+            transcript[field] = shift(transcript[field])
+        for segment in transcript["segments"]:
+            segment["start_timestamp"] = shift(segment["start_timestamp"])
+            segment["end_timestamp"] = shift(segment["end_timestamp"])
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    return json.dumps(transcript, ensure_ascii=False, indent=2)
+
+
+def video_part(url, start, end):
+    return {
+        "fileData": {"fileUri": url, "mimeType": "video/*"},
+        "videoMetadata": {"startOffset": f"{start}s", "endOffset": f"{end}s"},
+    }
+
+
+def audio_part(clip):
+    return {"inlineData": {"mimeType": "audio/mp3", "data": base64.b64encode(clip).decode("ascii")}}
+
+
+def build_request(media, prompt, thinking_level=None, max_output_tokens=None):
     # Thought summaries come back as parts marked "thought"; they are kept in
     # the request record, to see how Gemini went about a clip.
     config = {"thinkingConfig": {"includeThoughts": True}}
@@ -173,12 +313,8 @@ def build_request(url, start, end, prompt, thinking_level=None, max_output_token
         prompt = TRANSCRIPT_PROMPT
         config["responseMimeType"] = "application/json"
         config["responseJsonSchema"] = TRANSCRIPT_RESPONSE_SCHEMA
-    video = {
-        "fileData": {"fileUri": url, "mimeType": "video/*"},
-        "videoMetadata": {"startOffset": f"{start}s", "endOffset": f"{end}s"},
-    }
     return {
-        "contents": [{"role": "user", "parts": [video, {"text": prompt}]}],
+        "contents": [{"role": "user", "parts": [media, {"text": prompt}]}],
         "generationConfig": config,
     }
 
@@ -291,6 +427,9 @@ def parse_arguments():
         parser.error("Require 0 <= start < end")
     if args.max_output_tokens is not None and args.max_output_tokens < 1:
         parser.error("--max-output-tokens must be positive")
+    args.video = video_id(args.video_url)
+    if args.video is None:
+        parser.error(f"Not a YouTube video link or ID: {args.video_url}")
     return args
 
 
@@ -298,7 +437,7 @@ def new_record(args):
     """The request as asked; ask() adds what happened."""
     return {
         "id": time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(2),
-        "video": args.video_url,
+        "video": watch_url(args.video),
         "start": args.start,
         "end": args.end,
         "mode": "prompt" if args.prompt else "transcript",
@@ -315,12 +454,26 @@ def new_record(args):
 def ask(args, record):
     """Send the request, save the answer, and fill in the record; raise
     GeminiError if there is no complete answer."""
-    body = build_request(args.video_url, args.start, args.end, args.prompt, args.thinking_level, args.max_output_tokens)
-    send = functools.partial(post, model=record["model"])
     keys = load_keys()
     record["keys"] = {key.name: {"label": key.label, "fingerprint": fingerprint(key.value)} for key in keys}
+    if args.prompt is None:
+        audio = record["audio"] = {}
+        source = download_audio(args.video, audio)
+        clip = cut_audio(source, args.start, args.end)
+        audio.update(source=str(source), clip_bytes=len(clip))
+        media = audio_part(clip)
+    else:
+        media = video_part(watch_url(args.video), args.start, args.end)
+    body = build_request(media, args.prompt, args.thinking_level, args.max_output_tokens)
+    send = functools.partial(post, model=record["model"])
     response = call_gemini(keys, body, state_dir() / "gemini-cooldowns.json", record["attempts"], send=send)
     text = record_response(record, response)
+    if args.prompt is None:
+        # Gemini heard only the clip; an answer that is not the expected JSON,
+        # such as a cut-off one, keeps the clip's timestamps, and says so here.
+        shifted = shift_timestamps(text, args.start)
+        record["audio"]["timestamps_from"] = "video" if shifted else "clip"
+        text = shifted or text
     complete = record["finish_reason"] == "STOP"
     if args.output is None:
         print(text)
