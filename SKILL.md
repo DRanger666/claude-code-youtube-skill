@@ -92,9 +92,9 @@ so that you and the user can learn what each kind of request needs, so change
 them for a reason, tell the user what you changed and why, and put the reason
 in `--note`, which the record keeps:
 
-- `--thinking-level` (`low`, `medium`, `high`, `xhigh`; `minimal` on some
-  older models): how much Gemini reasons before answering. Thinking is billed
-  as output and counts against the output limit. If an answer stops with
+- `--thinking-level` (`low`, `medium`, `high`, `xhigh`): how much Gemini
+  reasons before answering. Thinking is billed as output and counts against
+  the output limit. If an answer stops with
   `MAX_TOKENS`, look at its record: when thinking took much of the output, a
   lower level may fit; when the answer itself was long, use a smaller clip. If
   an answer misreads who is speaking or what is on screen, its thought summary

@@ -281,6 +281,12 @@ class MainTests(unittest.TestCase):
         record = json.loads(self.records.read_text(encoding="utf-8"))
         self.assertEqual((record["outcome"], record["error"]), ("failed", "Stopped by the caller before Gemini answered"))
 
+    def test_minimal_thinking_is_refused_before_any_request(self):
+        arguments = ["gemini_video.py", "--video-url", "https://youtu.be/DStYkSO4Cc0", "--start", "0", "--end", "60",
+                     "--transcript", "--thinking-level", "minimal"]
+        with mock.patch.object(sys, "argv", arguments), mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            gemini_video.parse_arguments()
+
     def test_the_chosen_settings_are_sent_and_recorded(self):
         sent = {}
 

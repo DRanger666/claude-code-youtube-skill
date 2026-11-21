@@ -51,7 +51,9 @@ from typing import NamedTuple
 # unless told otherwise; "medium" is where we start, to adjust from records.
 MODEL = "gemini-4-hydrogen"
 THINKING_LEVEL = "medium"
-THINKING_LEVELS = ("minimal", "low", "medium", "high", "xhigh")
+# gemini-4-hydrogen's levels. It has no "minimal": Google's API rejects it, and
+# OpenRouter silently runs it as "low" (checked 2026-11-21).
+THINKING_LEVELS = ("low", "medium", "high", "xhigh")
 TIMEOUT_SECONDS = 600
 # Overload spikes last minutes, so the waits are longer than Google's SDK
 # default (about 1 second, doubling to 60): 5, 10, 20, 40 seconds, plus jitter.
