@@ -110,7 +110,13 @@ TRANSCRIPT_RESPONSE_SCHEMA = {
                         "type": "string",
                         "enum": ["sung", "spoken", "spoken_over_music", "other"],
                     },
-                    "language": {"type": "string"},
+                    # A free string came back as ben, bn, bne (another language), eng, en or
+                    # English across requests; with this, bn or en every time (checked 2026-11-23).
+                    "language": {
+                        "type": "string",
+                        "pattern": "^[a-z]{2}$",
+                        "description": "The ISO 639-1 two-letter code of the segment's language, such as bn or en",
+                    },
                     "text": {"type": "string"},
                     "audibility": {
                         "type": "string",

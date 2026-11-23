@@ -319,7 +319,7 @@ class MainTests(unittest.TestCase):
         transcript = {
             "clip_start_timestamp": "00:00.000", "clip_end_timestamp": "00:30.000",
             "segments": [{"start_timestamp": "00:01.250", "end_timestamp": "00:04.000", "vocal_type": "spoken",
-                          "language": "English", "text": "hello", "audibility": "clear"}],
+                          "language": "en", "text": "hello", "audibility": "clear"}],
             "completed_through_timestamp": "00:30.000", "transcription_complete": True, "truncation_detected": False,
         }
         response = json.loads(json.dumps(ANSWER))
@@ -335,6 +335,12 @@ class MainTests(unittest.TestCase):
         self.assertEqual((saved["clip_start_timestamp"], saved["clip_end_timestamp"]), ("00:30.000", "01:00.000"))
         self.assertEqual(saved["segments"][0]["start_timestamp"], "00:31.250")
         self.assertEqual(self.record["audio"]["timestamps_from"], "video")
+
+    def test_a_transcript_asks_for_a_two_letter_language_code(self):
+        schema = gemini_video.build_request({"inlineData": {}}, None)["generationConfig"]["responseJsonSchema"]
+        language = schema["properties"]["segments"]["items"]["properties"]["language"]
+        self.assertEqual(language["pattern"], "^[a-z]{2}$")
+        self.assertIn("ISO 639-1", language["description"])
 
     def test_a_question_sends_the_link_without_its_time_and_the_clip_range(self):
         sent = {}
